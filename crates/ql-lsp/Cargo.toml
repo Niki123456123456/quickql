@@ -1,0 +1,12 @@
+[package]
+name = "ql-lsp"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+quickql-core = { path = "../quickql-core" }
+serde_json.workspace = true
+tokio.workspace = true
+tower-lsp.workspace = true
+url.workspace = true

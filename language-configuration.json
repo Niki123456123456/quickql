@@ -1,0 +1,39 @@
+{
+  "comments": {
+    "lineComment": "--"
+  },
+  "quotes": [
+    {
+      "open": "'",
+      "close": "'"
+    },
+    {
+      "open": "\"",
+      "close": "\""
+    }
+  ],
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "'",
+      "close": "'"
+    },
+    {
+      "open": "\"",
+      "close": "\""
+    },
+    {
+      "open": "(",
+      "close": ")"
+    }
+  ]
+}

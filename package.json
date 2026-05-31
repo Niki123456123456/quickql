@@ -1,0 +1,122 @@
+{
+  "name": "quickql",
+  "displayName": "QuickQL",
+  "description": "Query JSON files from .ql documents with a Rust query engine and language server.",
+  "version": "0.0.2",
+  "publisher": "NiklasNordkamp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Niki123456123456/quickql.git"
+  },
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Data Science"
+  ],
+  "activationEvents": [
+    "onLanguage:ql",
+    "onView:quickql.results",
+    "onCommand:quickql.runQuery",
+    "onCommand:quickql.openResults"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ql",
+        "aliases": [
+          "QuickQL QL",
+          "ql"
+        ],
+        "extensions": [
+          ".ql"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ql",
+        "scopeName": "source.ql",
+        "path": "./syntaxes/ql.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "quickql.runQuery",
+        "title": "Run Query",
+        "icon": "$(play)"
+      },
+      {
+        "command": "quickql.openResults",
+        "title": "Open Query Results"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "quickql.runQuery",
+          "when": "resourceExtname == .ql",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "quickql",
+          "title": "QuickQL",
+          "icon": "resources/quickql.svg"
+        }
+      ]
+    },
+    "views": {
+      "quickql": [
+        {
+          "id": "quickql.results",
+          "name": "Results",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "QuickQL",
+      "properties": {
+        "quickql.enginePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ql-engine binary. Leave empty to use the bundled development binary."
+        },
+        "quickql.languageServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ql-lsp binary. Leave empty to use the bundled development binary."
+        },
+        "quickql.pageSize": {
+          "type": "number",
+          "default": 200,
+          "minimum": 25,
+          "maximum": 5000,
+          "description": "Rows fetched per virtualized results page."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "copy:binaries": "node scripts/copy-binaries.js",
+    "build:rust": "cargo build --release && npm run copy:binaries",
+    "vscode:prepublish": "npm run compile && npm run build:rust"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/vscode": "^1.92.0",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "scopeName": "source.ql",
+  "patterns": [
+    {
+      "name": "keyword.control.ql",
+      "match": "\\b(?i:FROM|SELECT|WHERE|LIMIT|AND|OR|ORDER|BY|ASC|DESC|AS|HEADERS|MAP|MANY|SUM|GROUP|ARRAY|MINDATE|MAXDATE|COUNT|GETDATE)\\b"
+    },
+    {
+      "name": "string.quoted.single.ql",
+      "begin": "'",
+      "end": "'"
+    },
+    {
+      "name": "constant.numeric.ql",
+      "match": "\\b\\d+(?:\\.\\d+)?\\b"
+    },
+    {
+      "name": "comment.line.double-dash.ql",
+      "match": "--.*$"
+    }
+  ]
+}

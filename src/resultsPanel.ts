@@ -1,0 +1,277 @@
+import * as vscode from 'vscode';
+
+export interface QueryResult {
+  columns: string[];
+  rowCount: number;
+  pageSize: number;
+  elapsedMs: number;
+  source: string;
+  pages: Map<number, unknown[][]>;
+}
+
+export class ResultsViewProvider implements vscode.WebviewViewProvider {
+  static readonly viewType = 'quickql.results';
+
+  private view: vscode.WebviewView | undefined;
+  private result: QueryResult | undefined;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true
+    };
+    webviewView.webview.onDidReceiveMessage(async message => {
+      if (message?.type === 'page' && this.result) {
+        const rows = await this.readRows(message.start, message.count);
+        await this.view?.webview.postMessage({ type: 'page', start: message.start, rows });
+      }
+    }, undefined, this.context.subscriptions);
+    this.render();
+  }
+
+  setResult(result: QueryResult): void {
+    this.result = result;
+    this.render();
+  }
+
+  private async readRows(start: number, count: number): Promise<unknown[][]> {
+    if (!this.result) {
+      return [];
+    }
+
+    const safeStart = Math.max(0, Math.min(start, this.result.rowCount));
+    const safeCount = Math.max(0, Math.min(count, this.result.rowCount - safeStart));
+    if (safeCount === 0) {
+      return [];
+    }
+
+    const rows: unknown[][] = [];
+    for (let rowIndex = safeStart; rowIndex < safeStart + safeCount; rowIndex += 1) {
+      const pageStart = Math.floor(rowIndex / this.result.pageSize) * this.result.pageSize;
+      const page = this.result.pages.get(pageStart);
+      rows.push(page?.[rowIndex - pageStart] ?? []);
+    }
+    return rows;
+  }
+
+  private render(): void {
+    if (this.view) {
+      this.view.webview.html = this.result ? this.html(this.result) : this.emptyHtml();
+    }
+  }
+
+  private emptyHtml(): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-descriptionForeground);
+      background: var(--vscode-editor-background);
+    }
+  </style>
+</head>
+<body>Run a .ql file to show results.</body>
+</html>`;
+  }
+
+  private html(result: QueryResult): string {
+    const nonce = getNonce();
+    const columns = JSON.stringify(result.columns);
+    const rowCount = JSON.stringify(result.rowCount);
+    const pageSize = result.pageSize;
+    const elapsed = Number.isFinite(result.elapsedMs) ? result.elapsedMs.toFixed(1) : '0.0';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --border: var(--vscode-panel-border);
+      --bg: var(--vscode-editor-background);
+      --fg: var(--vscode-editor-foreground);
+      --muted: var(--vscode-descriptionForeground);
+      --header: var(--vscode-sideBar-background);
+      --row-hover: var(--vscode-list-hoverBackground);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--fg);
+      background: var(--bg);
+      overflow: hidden;
+    }
+    .toolbar {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .table {
+      position: relative;
+      height: calc(100vh - 34px);
+      overflow: auto;
+    }
+    .spacer {
+      position: relative;
+      width: max-content;
+      min-width: 100%;
+    }
+    .header, .row {
+      display: grid;
+      grid-template-columns: repeat(${result.columns.length}, minmax(140px, 1fr));
+      min-width: 100%;
+    }
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--header);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    .cell {
+      min-height: 28px;
+      padding: 6px 10px;
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .viewport {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 28px;
+    }
+    .row {
+      height: 28px;
+    }
+    .row:hover {
+      background: var(--row-hover);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>${escapeHtml(result.source)}</strong>
+    <span>${result.rowCount.toLocaleString()} rows</span>
+    <span>${elapsed} ms</span>
+  </div>
+  <div id="table" class="table">
+    <div id="spacer" class="spacer">
+      <div id="header" class="header"></div>
+      <div id="viewport" class="viewport"></div>
+    </div>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const columns = ${columns};
+    const rowCount = ${rowCount};
+    const pageSize = ${pageSize};
+    const rowHeight = 28;
+    const table = document.getElementById('table');
+    const header = document.getElementById('header');
+    const spacer = document.getElementById('spacer');
+    const viewport = document.getElementById('viewport');
+    const cache = new Map();
+    const pending = new Set();
+
+    header.innerHTML = columns.map(c => '<div class="cell">' + escapeHtml(c) + '</div>').join('');
+    spacer.style.height = ((rowCount * rowHeight) + rowHeight) + 'px';
+
+    window.addEventListener('message', event => {
+      const message = event.data;
+      if (message.type === 'page') {
+        cache.set(message.start, message.rows);
+        pending.delete(message.start);
+        render();
+      }
+    });
+
+    table.addEventListener('scroll', render);
+    render();
+
+    function render() {
+      const firstVisible = Math.max(0, Math.floor((table.scrollTop - rowHeight) / rowHeight));
+      const visibleCount = Math.ceil(table.clientHeight / rowHeight) + 8;
+      const firstPage = Math.floor(firstVisible / pageSize) * pageSize;
+      const lastPage = Math.floor(Math.min(rowCount - 1, firstVisible + visibleCount) / pageSize) * pageSize;
+      for (let pageStart = firstPage; pageStart <= lastPage; pageStart += pageSize) {
+        if (!cache.has(pageStart) && !pending.has(pageStart)) {
+          pending.add(pageStart);
+          vscode.postMessage({ type: 'page', start: pageStart, count: pageSize });
+        }
+      }
+
+      const rows = collectRows(firstVisible, visibleCount);
+      viewport.style.transform = 'translateY(' + (firstVisible * rowHeight) + 'px)';
+      viewport.innerHTML = rows.map(item => {
+        const row = item.row || [];
+        return '<div class="row">' + columns.map((_, i) => '<div class="cell" title="' + escapeAttr(format(row[i])) + '">' + escapeHtml(format(row[i])) + '</div>').join('') + '</div>';
+      }).join('');
+    }
+
+    function collectRows(start, count) {
+      const result = [];
+      for (let rowIndex = start; rowIndex < Math.min(rowCount, start + count); rowIndex++) {
+        const pageStart = Math.floor(rowIndex / pageSize) * pageSize;
+        const page = cache.get(pageStart);
+        if (page) {
+          result.push({ row: page[rowIndex - pageStart] });
+        } else {
+          result.push({ row: columns.map(() => '') });
+        }
+      }
+      return result;
+    }
+
+    function format(value) {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+  </script>
+</body>
+</html>`;
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch));
+}
+
+function getNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let value = '';
+  for (let i = 0; i < 32; i += 1) {
+    value += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return value;
+}
