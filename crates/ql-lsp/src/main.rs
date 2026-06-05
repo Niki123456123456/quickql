@@ -26,7 +26,9 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![",".to_string(), " ".to_string()]),
                     ..CompletionOptions::default()
@@ -60,7 +62,10 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents.write().await.remove(&params.text_document.uri);
+        self.documents
+            .write()
+            .await
+            .remove(&params.text_document.uri);
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -80,17 +85,17 @@ impl LanguageServer for Backend {
 
 fn keyword_items() -> Vec<CompletionItem> {
     [
-        "FROM", "SELECT", "WHERE", "OR", "GROUP", "BY", "SUM", "ARRAY", "MINDATE", "MAXDATE",
-        "COUNT", "GETDATE", "MAP", "MANY",
+        "SOURCE", "MAP", "FILTER", "OR", "GROUP_BY", "SUM", "ARRAY", "MINDATE", "MAXDATE", "COUNT",
+        "GETDATE", "MAP_MANY", "SORT_BY",
     ]
-        .into_iter()
-        .map(|label| CompletionItem {
-            label: label.to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            detail: Some("QuickQL keyword".to_string()),
-            ..CompletionItem::default()
-        })
-        .collect()
+    .into_iter()
+    .map(|label| CompletionItem {
+        label: label.to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        detail: Some("QuickQL keyword".to_string()),
+        ..CompletionItem::default()
+    })
+    .collect()
 }
 
 impl Backend {
@@ -127,8 +132,7 @@ impl Backend {
             }
         }
 
-        let fields = quickql_core::fields_from_source_sample(&source_path, 100)
-            .unwrap_or_default();
+        let fields = quickql_core::fields_from_source_sample(&source_path, 100).unwrap_or_default();
         self.field_cache.write().await.insert(
             source_path,
             FieldCacheEntry {

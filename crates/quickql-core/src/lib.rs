@@ -146,17 +146,17 @@ pub fn parse_query(input: &str) -> Result<Query> {
         }
 
         let upper = line.to_ascii_uppercase();
-        if upper.starts_with("FROM ") {
+        if upper.starts_with("SOURCE ") {
             steps.push(SubQuery::From(parse_sources(line)?));
-        } else if upper.starts_with("SELECT ") {
-            steps.push(SubQuery::ColumnFilter(parse_select_exprs(&line[6..])?));
-        } else if upper.starts_with("WHERE ") {
-            steps.push(SubQuery::RowFilter(parse_row_filter(&line[5..])?));
-        } else if upper.starts_with("MAP MANY ") {
+        } else if upper.starts_with("MAP ") {
+            steps.push(SubQuery::ColumnFilter(parse_select_exprs(&line[3..])?));
+        } else if upper.starts_with("FILTER ") {
+            steps.push(SubQuery::RowFilter(parse_row_filter(&line[6..])?));
+        } else if upper.starts_with("MAP_MANY ") {
             steps.push(SubQuery::MapMany(parse_map_many(line)?));
-        } else if upper.starts_with("GROUP BY ") {
+        } else if upper.starts_with("GROUP_BY ") {
             steps.push(parse_group_by(line)?);
-        } else if upper.starts_with("ORDER BY ") {
+        } else if upper.starts_with("SORT_BY ") {
             steps.push(parse_order_by(line)?);
         } else {
             bail!("Unsupported query line: {line}");
@@ -344,12 +344,18 @@ fn apply_column_filter(result: QueryResult, exprs: &[SelectExpr]) -> Result<Quer
             SelectExpr::All => {
                 for column in &result.columns {
                     new_columns.push(column.clone());
-                    projections.push(Projection::Column(ColumnPath::new(&result.columns, column)?));
+                    projections.push(Projection::Column(ColumnPath::new(
+                        &result.columns,
+                        column,
+                    )?));
                 }
             }
             SelectExpr::Column(column) => {
                 new_columns.push(column.clone());
-                projections.push(Projection::Column(ColumnPath::new(&result.columns, column)?));
+                projections.push(Projection::Column(ColumnPath::new(
+                    &result.columns,
+                    column,
+                )?));
             }
             SelectExpr::Alias { output, input } => {
                 new_columns.push(output.clone());
@@ -361,7 +367,10 @@ fn apply_column_filter(result: QueryResult, exprs: &[SelectExpr]) -> Result<Quer
             }
             SelectExpr::GetDate { output, input } => {
                 new_columns.push(output.clone());
-                projections.push(Projection::GetDate(ColumnPath::new(&result.columns, input)?));
+                projections.push(Projection::GetDate(ColumnPath::new(
+                    &result.columns,
+                    input,
+                )?));
             }
         }
     }
@@ -433,7 +442,7 @@ fn apply_map_many(result: QueryResult, field: &str) -> Result<QueryResult> {
         match row.get(index) {
             Some(Value::Array(values)) => items.extend(values.iter().cloned()),
             Some(Value::Null) | None => {}
-            Some(value) => bail!("MAP MANY column '{field}' must be an array, got {value}"),
+            Some(value) => bail!("MAP_MANY column '{field}' must be an array, got {value}"),
         }
     }
 
@@ -637,7 +646,7 @@ fn parse_query_lenient(input: &str) -> Result<PartialQuery> {
     let mut partial = PartialQuery::default();
     for raw_line in input.lines() {
         let line = raw_line.split("--").next().unwrap_or("").trim();
-        if line.to_ascii_uppercase().starts_with("FROM ") {
+        if line.to_ascii_uppercase().starts_with("SOURCE ") {
             partial.sources = parse_sources(line)
                 .unwrap_or_default()
                 .into_iter()
@@ -649,13 +658,13 @@ fn parse_query_lenient(input: &str) -> Result<PartialQuery> {
 }
 
 fn parse_sources(line: &str) -> Result<Vec<Source>> {
-    let raw = line[4..].trim();
+    let raw = line[6..].trim();
     let sources: Vec<Source> = split_source_parts(raw)
         .into_iter()
         .map(parse_source)
         .collect::<Result<_>>()?;
     if sources.is_empty() {
-        bail!("FROM must include at least one source");
+        bail!("SOURCE must include at least one source");
     }
     Ok(sources)
 }
@@ -668,7 +677,7 @@ fn parse_source(raw: &str) -> Result<Source> {
     } else if rest.len() >= 7 && rest[..7].eq_ignore_ascii_case("HEADERS") {
         parse_headers(rest[7..].trim())?
     } else {
-        bail!("Unsupported FROM clause after source: {rest}");
+        bail!("Unsupported SOURCE clause after source: {rest}");
     };
     Ok(Source { uri, headers })
 }
@@ -709,7 +718,7 @@ fn has_headers_clause(input: &str) -> bool {
 
 fn parse_source_uri(raw: &str) -> Result<(String, &str)> {
     let Some(first) = raw.chars().next() else {
-        bail!("FROM must include a source");
+        bail!("SOURCE must include a source");
     };
 
     if first == '\'' || first == '"' {
@@ -723,7 +732,7 @@ fn parse_source_uri(raw: &str) -> Result<(String, &str)> {
                 return Ok((raw[1..i].to_string(), &raw[i + first.len_utf8()..]));
             }
         }
-        bail!("Unterminated quoted FROM source");
+        bail!("Unterminated quoted SOURCE source");
     }
 
     let end = raw.find(char::is_whitespace).unwrap_or(raw.len());
@@ -807,7 +816,7 @@ fn parse_select_exprs(input: &str) -> Result<Vec<SelectExpr>> {
         .map(parse_select_expr)
         .collect::<Result<_>>()?;
     if exprs.is_empty() {
-        bail!("SELECT must include at least one column");
+        bail!("MAP must include at least one column");
     }
     Ok(exprs)
 }
@@ -823,7 +832,7 @@ fn parse_select_expr(input: &str) -> Result<SelectExpr> {
 
     let output = output.trim();
     if output.is_empty() {
-        bail!("SELECT output column cannot be empty");
+        bail!("MAP output column cannot be empty");
     }
 
     let expr = expr.trim();
@@ -836,7 +845,7 @@ fn parse_select_expr(input: &str) -> Result<SelectExpr> {
 
     let Some(paren) = expr.find('(') else {
         if expr.is_empty() {
-            bail!("SELECT expression input cannot be empty");
+            bail!("MAP expression input cannot be empty");
         }
         return Ok(SelectExpr::Alias {
             output: output.to_string(),
@@ -844,13 +853,13 @@ fn parse_select_expr(input: &str) -> Result<SelectExpr> {
         });
     };
     if !expr.ends_with(')') {
-        bail!("Expected SELECT expression FUNC(input) but got: {expr}");
+        bail!("Expected MAP expression FUNC(input) but got: {expr}");
     }
 
     let func_name = expr[..paren].trim().to_ascii_uppercase();
     let input = expr[paren + 1..expr.len() - 1].trim();
     if input.is_empty() {
-        bail!("SELECT expression input cannot be empty");
+        bail!("MAP expression input cannot be empty");
     }
 
     match func_name.as_str() {
@@ -858,7 +867,7 @@ fn parse_select_expr(input: &str) -> Result<SelectExpr> {
             output: output.to_string(),
             input: input.to_string(),
         }),
-        other => bail!("Unknown SELECT function: {other}"),
+        other => bail!("Unknown MAP function: {other}"),
     }
 }
 
@@ -869,7 +878,7 @@ fn parse_row_filter(input: &str) -> Result<Vec<Filter>> {
         .collect::<Result<_>>()?;
 
     if filters.is_empty() {
-        bail!("WHERE must include at least one filter");
+        bail!("FILTER must include at least one filter");
     }
 
     Ok(filters)
@@ -877,7 +886,7 @@ fn parse_row_filter(input: &str) -> Result<Vec<Filter>> {
 
 fn parse_filter(input: &str) -> Result<Filter> {
     let Some((column, value)) = input.split_once('=') else {
-        bail!("WHERE currently supports equality filters joined by OR: WHERE column = value OR other = value");
+        bail!("FILTER currently supports equality filters joined by OR: FILTER column = value OR other = value");
     };
 
     let value = unquote(value.trim()).to_string();
@@ -891,7 +900,7 @@ fn parse_filter(input: &str) -> Result<Filter> {
 fn parse_map_many(line: &str) -> Result<String> {
     let field = line[8..].trim();
     if field.is_empty() {
-        bail!("MAP MANY requires a column name");
+        bail!("MAP_MANY requires a column name");
     }
     Ok(field.to_string())
 }
@@ -963,11 +972,11 @@ fn is_identifier_char(c: char) -> bool {
 }
 
 fn parse_group_by(line: &str) -> Result<SubQuery> {
-    let rest = line[9..].trim(); // skip "GROUP BY "
+    let rest = line[8..].trim(); // skip "GROUP_BY"
     let upper = rest.to_ascii_uppercase();
 
-    let (keys_str, aggregations) = if let Some(pos) = upper.find(" SELECT ") {
-        let aggs_str = rest[pos + 8..].trim();
+    let (keys_str, aggregations) = if let Some(pos) = upper.find(" MAP ") {
+        let aggs_str = rest[pos + 5..].trim();
         let aggregations = split_top_level_commas(aggs_str)
             .into_iter()
             .map(|expr| parse_aggregation(expr.trim()))
@@ -985,7 +994,7 @@ fn parse_group_by(line: &str) -> Result<SubQuery> {
         .collect();
 
     if keys.is_empty() {
-        bail!("GROUP BY requires at least one key column");
+        bail!("GROUP_BY requires at least one key column");
     }
 
     Ok(SubQuery::GroupBy { keys, aggregations })
@@ -1017,7 +1026,11 @@ fn parse_aggregation(expr: &str) -> Result<Aggregation> {
         other => bail!("Unknown aggregation function: {other}"),
     };
 
-    Ok(Aggregation { output, func, input })
+    Ok(Aggregation {
+        output,
+        func,
+        input,
+    })
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {
@@ -1077,10 +1090,7 @@ fn apply_group_by(
             let key_vals = if group_all {
                 Vec::new()
             } else {
-                key_paths
-                    .iter()
-                    .map(|path| path.value(&row))
-                    .collect()
+                key_paths.iter().map(|path| path.value(&row)).collect()
             };
             groups.insert(key_str.clone(), (key_vals, Vec::new()));
         }
@@ -1112,20 +1122,15 @@ fn apply_group_by(
                                 _ => 0.0,
                             })
                             .sum();
-                        if sum.fract() == 0.0
-                            && sum >= i64::MIN as f64
-                            && sum <= i64::MAX as f64
-                        {
+                        if sum.fract() == 0.0 && sum >= i64::MIN as f64 && sum <= i64::MAX as f64 {
                             serde_json::json!(sum as i64)
                         } else {
                             serde_json::json!(sum)
                         }
                     }
-                    AggFunc::Array => Value::Array(
-                        rows.iter()
-                            .map(|row| input_path.value(row))
-                            .collect(),
-                    ),
+                    AggFunc::Array => {
+                        Value::Array(rows.iter().map(|row| input_path.value(row)).collect())
+                    }
                     AggFunc::MinDate => aggregate_date(&rows, input_path, DateAggregate::Min)?,
                     AggFunc::MaxDate => aggregate_date(&rows, input_path, DateAggregate::Max)?,
                     AggFunc::Count => serde_json::json!(rows.len()),
@@ -1143,7 +1148,7 @@ fn apply_group_by(
 }
 
 fn parse_order_by(line: &str) -> Result<SubQuery> {
-    let rest = line[9..].trim(); // skip "ORDER BY "
+    let rest = line[7..].trim(); // skip "SORT_BY"
     let keys: Vec<SortKey> = rest
         .split(',')
         .map(str::trim)
@@ -1152,9 +1157,14 @@ fn parse_order_by(line: &str) -> Result<SubQuery> {
             let mut tokens = part.splitn(2, |c: char| c.is_ascii_whitespace());
             let column = tokens.next().unwrap_or("").trim().to_string();
             if column.is_empty() {
-                bail!("ORDER BY: empty column name");
+                bail!("SORT_BY: empty column name");
             }
-            let direction = match tokens.next().map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+            let direction = match tokens
+                .next()
+                .map(str::trim)
+                .map(str::to_ascii_uppercase)
+                .as_deref()
+            {
                 Some("DESC") => SortDirection::Desc,
                 _ => SortDirection::Asc,
             };
@@ -1163,7 +1173,7 @@ fn parse_order_by(line: &str) -> Result<SubQuery> {
         .collect::<Result<_>>()?;
 
     if keys.is_empty() {
-        bail!("ORDER BY requires at least one column");
+        bail!("SORT_BY requires at least one column");
     }
     Ok(SubQuery::OrderBy(keys))
 }
@@ -1188,7 +1198,11 @@ fn apply_order_by(result: QueryResult, sort_keys: &[SortKey]) -> Result<QueryRes
             let av = a.get(idx).unwrap_or(&Value::Null);
             let bv = b.get(idx).unwrap_or(&Value::Null);
             let ord = compare_values(av, bv);
-            let ord = if matches!(dir, SortDirection::Desc) { ord.reverse() } else { ord };
+            let ord = if matches!(dir, SortDirection::Desc) {
+                ord.reverse()
+            } else {
+                ord
+            };
             if ord != std::cmp::Ordering::Equal {
                 return ord;
             }
@@ -1207,10 +1221,11 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
         (Value::Null, _) => std::cmp::Ordering::Less,
         (_, Value::Null) => std::cmp::Ordering::Greater,
-        (Value::Number(an), Value::Number(bn)) => {
-            an.as_f64().unwrap_or(f64::NAN).partial_cmp(&bn.as_f64().unwrap_or(f64::NAN))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
+        (Value::Number(an), Value::Number(bn)) => an
+            .as_f64()
+            .unwrap_or(f64::NAN)
+            .partial_cmp(&bn.as_f64().unwrap_or(f64::NAN))
+            .unwrap_or(std::cmp::Ordering::Equal),
         (Value::String(as_), Value::String(bs)) => as_.cmp(bs),
         (Value::Bool(ab), Value::Bool(bb)) => ab.cmp(bb),
         // cross-type: sort by type tag so the order is deterministic
@@ -1520,12 +1535,12 @@ mod tests {
         )?;
         fs::write(
             nested_dir.join("inner.ql"),
-            "FROM 'data.csv'\nSELECT length=count, search\n",
+            "SOURCE 'data.csv'\nMAP length=count, search\n",
         )?;
         let outer_path = dir.join("outer.ql");
         fs::write(
             &outer_path,
-            "FROM 'nested/inner.ql'\nWHERE search = alpha\nSELECT length, text=\"nested\"\n",
+            "SOURCE 'nested/inner.ql'\nFILTER search = alpha\nMAP length, text=\"nested\"\n",
         )?;
 
         let mut out = Vec::new();
@@ -1544,7 +1559,7 @@ mod tests {
     fn ql_source_rejects_recursive_references() -> Result<()> {
         let dir = test_dir("ql-recursion");
         let query_path = dir.join("self.ql");
-        fs::write(&query_path, "FROM 'self.ql'\nSELECT *\n")?;
+        fs::write(&query_path, "SOURCE 'self.ql'\nMAP *\n")?;
 
         let query_text = fs::read_to_string(&query_path)?;
         let query = parse_query(&query_text)?;
@@ -1567,7 +1582,7 @@ mod tests {
         let query_path = dir.join("query.ql");
         fs::write(
             &query_path,
-            "FROM 'one.csv', 'two.csv'\nSELECT name, count, score\n",
+            "SOURCE 'one.csv', 'two.csv'\nMAP name, count, score\n",
         )?;
 
         let mut out = Vec::new();
@@ -1585,7 +1600,7 @@ mod tests {
     #[test]
     fn parses_comma_separated_sources_without_splitting_quotes_or_headers() -> Result<()> {
         assert_eq!(
-            parse_sources(r#"FROM 'one,two.csv', three.csv"#)?,
+            parse_sources(r#"SOURCE 'one,two.csv', three.csv"#)?,
             vec![
                 Source {
                     uri: "one,two.csv".to_string(),
@@ -1599,7 +1614,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_sources(r#"FROM 'https://example.test/users' HEADERS A = one, B = two"#)?,
+            parse_sources(r#"SOURCE 'https://example.test/users' HEADERS A = one, B = two"#)?,
             vec![Source {
                 uri: "https://example.test/users".to_string(),
                 headers: vec![

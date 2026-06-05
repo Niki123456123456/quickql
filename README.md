@@ -8,115 +8,115 @@ QuickQL queries are line-based pipelines. Blank lines are ignored, and `--`
 starts a comment.
 
 ```ql
-FROM 'example.json'
-WHERE count = 7
-SELECT count, search
-ORDER BY count DESC
+SOURCE 'example.json'
+FILTER count = 7
+MAP count, search
+SORT_BY count DESC
 ```
 
-`FROM` reads one or more source files. Relative paths are resolved from the
+`SOURCE` reads one or more source files. Relative paths are resolved from the
 `.ql` file, and quotes around paths are optional. Separate multiple sources
 with commas to append their rows:
 
 ```ql
-FROM 'example.csv'
+SOURCE 'example.csv'
 ```
 
 ```ql
-FROM 'one.csv', 'two.csv'
+SOURCE 'one.csv', 'two.csv'
 ```
 
 HTTP JSON sources are loaded with a GET request. Add request headers after the
 source with `HEADERS`:
 
 ```ql
-FROM 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
+SOURCE 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
 ```
 
 JSON sources may be a single object or an array of objects. QuickQL uses the
 top-level object keys as columns. CSV sources must include headers; comma,
 semicolon, and tab delimiters are detected from the first row.
 
-`SELECT` keeps columns in the listed order. Use `SELECT *`, or omit `SELECT`,
+`MAP` keeps columns in the listed order. Use `MAP *`, or omit `MAP`,
 to return every column. Rename columns with `output=input`, or add quoted
 static string columns with `output="value"`. It can also add computed columns
 with `GETDATE`, which maps an ISO timestamp like `2026-05-26T18:23:07.004Z` to
 `2026-05-26`:
 
 ```ql
-FROM 'example.csv'
-SELECT length=count, search, text="test... "
+SOURCE 'example.csv'
+MAP length=count, search, text="test... "
 ```
 
 ```ql
-FROM 'example.json'
-SELECT *, date = GETDATE(updatedAt)
+SOURCE 'example.json'
+MAP *, date = GETDATE(updatedAt)
 ```
 
-`WHERE` currently supports equality filters. Use `OR` to match any of several
+`FILTER` currently supports equality filters. Use `OR` to match any of several
 filters on the same line:
 
 ```ql
-FROM 'example.json'
-WHERE index = global_doku_de OR index = public_docs
-WHERE published = true
-SELECT count, day, search
+SOURCE 'example.json'
+FILTER index = global_doku_de OR index = public_docs
+FILTER published = true
+MAP count, day, search
 ```
 
 Quoted string values work too:
 
 ```ql
-FROM 'example.csv'
-WHERE Channel = 'Public Knowledge Base'
-SELECT Number_of_Searches, Search_Term
+SOURCE 'example.csv'
+FILTER Channel = 'Public Knowledge Base'
+MAP Number_of_Searches, Search_Term
 ```
 
-`GROUP BY` deduplicates rows by one or more key columns. It can also compute
+`GROUP_BY` deduplicates rows by one or more key columns. It can also compute
 aggregations with `SUM`, `ARRAY`, `COUNT`, `MINDATE`, and `MAXDATE`. Date
 aggregations parse strings formatted as `23.01.2026`, `23-01-2026`, or
 `2026-01-23`:
 
 ```ql
-FROM 'example.csv'
-WHERE Channel = 'Public Knowledge Base'
-GROUP BY Search_Term SELECT Number_of_Searches = SUM(Number_of_Searches), Search_Dates = ARRAY(Search_Date), Count = COUNT(Search_Term), First_Date = MINDATE(Search_Date), Last_Date = MAXDATE(Search_Date)
-ORDER BY Number_of_Searches DESC
+SOURCE 'example.csv'
+FILTER Channel = 'Public Knowledge Base'
+GROUP_BY Search_Term MAP Number_of_Searches = SUM(Number_of_Searches), Search_Dates = ARRAY(Search_Date), Count = COUNT(Search_Term), First_Date = MINDATE(Search_Date), Last_Date = MAXDATE(Search_Date)
+SORT_BY Number_of_Searches DESC
 ```
 
-Use `GROUP BY *` to aggregate every input row into a single group:
+Use `GROUP_BY *` to aggregate every input row into a single group:
 
 ```ql
-FROM 'example.json'
-GROUP BY * SELECT ids = ARRAY(id)
+SOURCE 'example.json'
+GROUP_BY * MAP ids = ARRAY(id)
 ```
 
 For JSON object columns, use dot paths to group or aggregate nested values:
 
 ```ql
-FROM 'example.json'
-GROUP BY metadata.source SELECT count = COUNT(id)
+SOURCE 'example.json'
+GROUP_BY metadata.source MAP count = COUNT(id)
 ```
 
-`ORDER BY` accepts one or more columns. Direction is optional and defaults to
+`SORT_BY` accepts one or more columns. Direction is optional and defaults to
 ascending:
 
 ```ql
-FROM 'example.json'
-ORDER BY count DESC, search ASC
+SOURCE 'example.json'
+SORT_BY count DESC, search ASC
 ```
 
-`MAP MANY` expands an array column into one row per array item. This is useful
+`MAP_MANY` expands an array column into one row per array item. This is useful
 for paged HTTP responses like `{ "items": [...], "totalCount": 10299 }`:
 
 ```ql
-FROM 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
-SELECT *
-MAP MANY items
+SOURCE 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
+MAP *
+MAP_MANY items
 ```
 
-Supported query lines are `FROM`, `WHERE`, `SELECT`, `MAP MANY`, `GROUP BY`,
-and `ORDER BY`. Lines run in the order they appear, so filter, map, or group
-before a `SELECT` that removes columns needed by later steps. Multiple `WHERE`
+Supported query lines are `SOURCE`, `FILTER`, `MAP`, `MAP_MANY`, `GROUP_BY`,
+and `SORT_BY`. Lines run in the order they appear, so filter, map, or group
+before a `MAP` that removes columns needed by later steps. Multiple `FILTER`
 lines are applied as separate pipeline steps. `LIMIT` and `AND` are not
 currently implemented.
 
@@ -129,4 +129,4 @@ Results open in the bottom QuickQL panel. The Rust engine streams result rows to
 ## Completions
 
 The language server suggests QuickQL keywords and reads the JSON or CSV file
-referenced by `FROM` to suggest source field names.
+referenced by `SOURCE` to suggest source field names.
