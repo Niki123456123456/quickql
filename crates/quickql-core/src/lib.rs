@@ -153,7 +153,13 @@ impl CaluculatedValue {
                     "PUT" => {
                         Self::open_source(values.first(), query_path, reqwest::Method::PUT, ql_stack)
                     }
-                    // CONCAT
+                    "CONCAT" => Value::String(
+                        values
+                            .iter()
+                            .flat_map(flatten_value)
+                            .map(value_to_string)
+                            .collect(),
+                    ),
                     _ => Value::Null,
                 }
             }
@@ -238,6 +244,14 @@ fn flatten_value(value: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
     match value {
         Value::Array(values) => Box::new(values.iter()),
         value => Box::new(std::iter::once(value)),
+    }
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Null => String::new(),
+        value => value.to_string(),
     }
 }
 
