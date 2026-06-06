@@ -142,29 +142,64 @@ impl CaluculatedValue {
                         DateAggregate::Max,
                     ),
                     "OPEN" => {
-                        if let Some(Value::String(source)) = values.first() {
-                            return execution::load_query_source(query_path, ql_stack, source, Default::default())
-                                .unwrap_or_default();
-                        }
-                        if let Some(Value::Object(obj)) = values.first() {
-                            let src = obj.get("src").and_then(|x| x.as_str()).unwrap_or_default();
-                            let mut headers: HashMap<&str, &str> = Default::default();
-                            if let Some(source_headers) = obj.get("headers").and_then(|x| x.as_object()) {
-                                for (key, value) in source_headers.iter() {
-                                    if let Some(value) = value.as_str() {
-                                        headers.insert(key.as_str(), value);
-                                    }
-                                }
-                            }
-                            return execution::load_query_source(query_path, ql_stack, src, headers)
-                                .unwrap_or_default();
-                        }
-                        return Value::Null;
+                        Self::open_source(values.first(), query_path, reqwest::Method::GET, ql_stack)
                     }
+                    "GET" => {
+                        Self::open_source(values.first(), query_path, reqwest::Method::GET, ql_stack)
+                    }
+                    "POST" => {
+                        Self::open_source(values.first(), query_path, reqwest::Method::POST, ql_stack)
+                    }
+                    "PUT" => {
+                        Self::open_source(values.first(), query_path, reqwest::Method::PUT, ql_stack)
+                    }
+                    // CONCAT
                     _ => Value::Null,
                 }
             }
         }
+    }
+
+    fn open_source(
+        value: Option<&Value>,
+        query_path: &Path,
+        method: reqwest::Method,
+        ql_stack: &mut Vec<PathBuf>,
+    ) -> Value {
+        if let Some(Value::String(source)) = value {
+            return execution::load_query_source(
+                query_path,
+                ql_stack,
+                source,
+                method,
+                Default::default(),
+                None,
+            )
+            .unwrap_or_default();
+        }
+
+        if let Some(Value::Object(obj)) = value {
+            let src = obj.get("src").and_then(|x| x.as_str()).unwrap_or_default();
+            let mut headers: HashMap<&str, &str> = Default::default();
+            if let Some(source_headers) = obj.get("headers").and_then(|x| x.as_object()) {
+                for (key, value) in source_headers.iter() {
+                    if let Some(value) = value.as_str() {
+                        headers.insert(key.as_str(), value);
+                    }
+                }
+            }
+            return execution::load_query_source(
+                query_path,
+                ql_stack,
+                src,
+                method,
+                headers,
+                obj.get("body"),
+            )
+            .unwrap_or_default();
+        }
+
+        Value::Null
     }
 }
 enum DateAggregate {

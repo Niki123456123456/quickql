@@ -18,12 +18,18 @@ pub(crate) fn load_json_source(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
-pub(crate) fn load_json_http_source(uri: &str, headers: HashMap<&str, &str>) -> Result<Value> {
+pub(crate) fn load_json_http_source(
+    method: reqwest::Method,
+    uri: &str,
+    headers: HashMap<&str, &str>,
+    body: Option<&Value>,
+) -> Result<Value> {
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
         .context("Building HTTP client")?;
-    let mut request = client.get(uri);
+    let method_label = method.as_str().to_string();
+    let mut request = client.request(method, uri);
     for (name, value) in headers {
         let name = HeaderName::from_str(name)
             .with_context(|| format!("Invalid HTTP header name {name}"))?;
@@ -31,12 +37,15 @@ pub(crate) fn load_json_http_source(uri: &str, headers: HashMap<&str, &str>) -> 
             .with_context(|| format!("Invalid HTTP header value for {name}"))?;
         request = request.header(name, value);
     }
+    if let Some(body) = body {
+        request = request.json(body);
+    }
 
     let value: Value = request
         .send()
-        .with_context(|| format!("GET JSON source {uri}"))?
+        .with_context(|| format!("{method_label} JSON source {uri}"))?
         .error_for_status()
-        .with_context(|| format!("GET JSON source {uri} returned an error status"))?
+        .with_context(|| format!("{method_label} JSON source {uri} returned an error status"))?
         .json()
         .with_context(|| format!("Parsing JSON response from {uri}"))?;
     Ok(value)
