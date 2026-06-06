@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -66,7 +69,12 @@ pub enum CaluculatedValue {
 }
 
 impl CaluculatedValue {
-    pub(crate) fn caluculate(&self, value: &Value) -> Value {
+    pub(crate) fn caluculate(
+        &self,
+        value: &Value,
+        query_path: &Path,
+        ql_stack: &mut Vec<PathBuf>,
+    ) -> Value {
         match self {
             CaluculatedValue::Reference(path) => path
                 .iter()
@@ -81,7 +89,10 @@ impl CaluculatedValue {
                 function,
                 parameters,
             } => {
-                let values: Vec<_> = parameters.iter().map(|x| x.caluculate(value)).collect();
+                let values: Vec<_> = parameters
+                    .iter()
+                    .map(|x| x.caluculate(value, query_path, ql_stack))
+                    .collect();
                 match function.to_ascii_uppercase().as_str() {
                     "SUM" => {
                         let sum: f64 = values
@@ -130,6 +141,16 @@ impl CaluculatedValue {
                             .collect::<Vec<_>>(),
                         DateAggregate::Max,
                     ),
+                    "OPEN" => {
+                        if let Some(Value::String(source)) = values.first() {
+                            if let Ok(result) =
+                                execution::load_query_source(query_path, source, ql_stack)
+                            {
+                                return Value::Array(result.rows);
+                            }
+                        }
+                        return Value::Null;
+                    }
                     _ => Value::Null,
                 }
             }

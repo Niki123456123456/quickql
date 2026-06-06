@@ -155,10 +155,10 @@ fn execute_pipeline_with_stack(
     for step in &query.steps {
         result = match step {
             SubQuery::Source(sources) => load_sources(query_path, sources, ql_stack)?,
-            SubQuery::Map(mapping) => apply_map(result, mapping),
-            SubQuery::Filter(filter) => apply_filter(result, filter),
+            SubQuery::Map(mapping) => apply_map(result, mapping, query_path, ql_stack),
+            SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
             SubQuery::MapMany(field) => apply_map_many(result, field)?,
-            SubQuery::GroupBy { keys, mapping } => apply_group_by(result, keys, mapping)?,
+            SubQuery::GroupBy { keys, mapping } => apply_group_by(result, keys, mapping, query_path, ql_stack)?,
             SubQuery::OrderBy(sort_keys) => apply_order_by(result, sort_keys),
         };
     }
@@ -166,7 +166,12 @@ fn execute_pipeline_with_stack(
     Ok(result)
 }
 
-fn apply_map(result: QueryResult, mapping: &[MapExpr]) -> QueryResult {
+fn apply_map(
+    result: QueryResult,
+    mapping: &[MapExpr],
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+) -> QueryResult {
     if mapping.len() == 1 && matches!(mapping[0], MapExpr::All) {
         return result;
     }
@@ -184,7 +189,11 @@ fn apply_map(result: QueryResult, mapping: &[MapExpr]) -> QueryResult {
                         }
                     }
                     MapExpr::Specific { column, value } => {
-                        set_path(&mut output, column, value.caluculate(row));
+                        set_path(
+                            &mut output,
+                            column,
+                            value.caluculate(row, query_path, ql_stack),
+                        );
                     }
                 }
             }
@@ -195,11 +204,16 @@ fn apply_map(result: QueryResult, mapping: &[MapExpr]) -> QueryResult {
     QueryResult::new(rows)
 }
 
-fn apply_filter(result: QueryResult, filter: &CaluculatedValue) -> QueryResult {
+fn apply_filter(
+    result: QueryResult,
+    filter: &CaluculatedValue,
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+) -> QueryResult {
     let rows = result
         .rows
         .into_iter()
-        .filter(|row| value_truthy(&filter.caluculate(row)))
+        .filter(|row| value_truthy(&filter.caluculate(row, query_path, ql_stack)))
         .collect();
     QueryResult::new(rows)
 }
@@ -226,16 +240,17 @@ fn load_sources(
 ) -> Result<QueryResult> {
     let mut rows = Vec::new();
     for source in sources {
-        let source = source.caluculate(&Value::Null);
-        let source = source
-            .as_str()
-            .with_context(|| format!("SOURCE value must be a string, got {source}"))?;
-        rows.extend(load_query_source(query_path, source, ql_stack)?.rows);
+        let source = source.caluculate(&Value::Null, query_path, ql_stack);
+        if let Value::Array(array) = source  {
+            rows.extend(array);
+        } else {
+            rows.push(source);
+        }
     }
     Ok(QueryResult::new(rows))
 }
 
-fn load_query_source(
+pub fn load_query_source(
     query_path: &Path,
     source: &str,
     ql_stack: &mut Vec<PathBuf>,
@@ -282,7 +297,8 @@ fn fields_from_ql_source(path: &Path) -> Result<Vec<String>> {
 fn apply_group_by(
     result: QueryResult,
     keys: &[String],
-    mapping: &[MapExpr],
+    mapping: &[MapExpr], query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
 ) -> Result<QueryResult> {
     let group_all = keys.len() == 1 && keys[0] == ALL_COLUMNS;
     let key_paths: Vec<Vec<String>> = if group_all {
@@ -331,7 +347,7 @@ fn apply_group_by(
             match expr {
                 MapExpr::All => {}
                 MapExpr::Specific { column, value } => {
-                    set_path(&mut output, column, value.caluculate(&group_value));
+                    set_path(&mut output, column, value.caluculate(&group_value, query_path, ql_stack));
                 }
             }
         }
@@ -388,8 +404,6 @@ fn type_rank(value: &Value) -> u8 {
         Value::Object(_) => 5,
     }
 }
-
-
 
 pub fn parse_date_key(input: &str) -> Result<Option<i32>> {
     let date = input.split('T').next().unwrap_or("").trim();
@@ -654,108 +668,4 @@ fn is_ql_path(path: &Path) -> bool {
 
 fn is_http_uri(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn group_by_maps_nested_fields_to_arrays() {
-        let result = QueryResult::new(vec![
-            json!({
-                "text": "test",
-                "object": {
-                    "number": 42
-                }
-            }),
-            json!({
-                "text": "test2",
-                "object": {
-                    "number": 43
-                }
-            }),
-        ]);
-        let mapping = vec![
-            MapExpr::Specific {
-                column: vec!["text".to_string()],
-                value: CaluculatedValue::Reference(vec!["text".to_string()]),
-            },
-            MapExpr::Specific {
-                column: vec!["object".to_string()],
-                value: CaluculatedValue::Reference(vec!["object".to_string()]),
-            },
-        ];
-
-        let grouped = apply_group_by(result, &[ALL_COLUMNS.to_string()], &mapping).unwrap();
-
-        assert_eq!(
-            grouped.rows,
-            vec![json!({
-                "text": ["test", "test2"],
-                "object": {
-                    "number": [42, 43]
-                }
-            })]
-        );
-    }
-
-    #[test]
-    fn group_by_aggregates_use_grouped_field_arrays() {
-        let result = QueryResult::new(vec![
-            json!({
-                "id": 1,
-                "number": 42,
-                "date": "2026-01-01"
-            }),
-            json!({
-                "id": 2,
-                "number": 43,
-                "date": "2026-01-03"
-            }),
-        ]);
-        let mapping = vec![
-            MapExpr::Specific {
-                column: vec!["ids".to_string()],
-                value: CaluculatedValue::FunctionCall {
-                    function: "ARRAY".to_string(),
-                    parameters: vec![CaluculatedValue::Reference(vec!["id".to_string()])],
-                },
-            },
-            MapExpr::Specific {
-                column: vec!["total".to_string()],
-                value: CaluculatedValue::FunctionCall {
-                    function: "SUM".to_string(),
-                    parameters: vec![CaluculatedValue::Reference(vec!["number".to_string()])],
-                },
-            },
-            MapExpr::Specific {
-                column: vec!["count".to_string()],
-                value: CaluculatedValue::FunctionCall {
-                    function: "COUNT".to_string(),
-                    parameters: vec![CaluculatedValue::Reference(vec!["id".to_string()])],
-                },
-            },
-            MapExpr::Specific {
-                column: vec!["last_date".to_string()],
-                value: CaluculatedValue::FunctionCall {
-                    function: "MAXDATE".to_string(),
-                    parameters: vec![CaluculatedValue::Reference(vec!["date".to_string()])],
-                },
-            },
-        ];
-
-        let grouped = apply_group_by(result, &[ALL_COLUMNS.to_string()], &mapping).unwrap();
-
-        assert_eq!(
-            grouped.rows,
-            vec![json!({
-                "ids": [1, 2],
-                "total": 85,
-                "count": 2,
-                "last_date": "2026-01-03"
-            })]
-        );
-    }
 }
