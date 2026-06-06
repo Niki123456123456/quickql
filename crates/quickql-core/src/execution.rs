@@ -326,12 +326,12 @@ fn apply_group_by(
             }
         }
 
-        let array = Value::Array(rows);
+        let group_value = grouped_rows_value(&rows);
         for expr in mapping {
             match expr {
                 MapExpr::All => {}
                 MapExpr::Specific { column, value } => {
-                    set_path(&mut output, column, value.caluculate(&array));
+                    set_path(&mut output, column, value.caluculate(&group_value));
                 }
             }
         }
@@ -482,6 +482,39 @@ fn set_path(output: &mut Map<String, Value>, path: &[String], value: Value) {
     current.insert(last.clone(), value);
 }
 
+fn grouped_rows_value(rows: &[Value]) -> Value {
+    if rows.iter().any(|value| matches!(value, Value::Object(_)))
+        && rows
+            .iter()
+            .all(|value| matches!(value, Value::Object(_) | Value::Null))
+    {
+        return Value::Object(grouped_object_rows(rows));
+    }
+
+    Value::Array(rows.to_vec())
+}
+
+fn grouped_object_rows(rows: &[Value]) -> Map<String, Value> {
+    let keys = rows
+        .iter()
+        .filter_map(Value::as_object)
+        .flat_map(|object| object.keys().cloned())
+        .collect::<BTreeSet<_>>();
+
+    keys.into_iter()
+        .map(|key| {
+            let values = rows
+                .iter()
+                .map(|row| match row {
+                    Value::Object(object) => object.get(&key).cloned().unwrap_or(Value::Null),
+                    _ => Value::Null,
+                })
+                .collect::<Vec<_>>();
+            (key, grouped_rows_value(&values))
+        })
+        .collect()
+}
+
 fn path_parts(input: &str) -> Vec<String> {
     input
         .split('.')
@@ -621,4 +654,108 @@ fn is_ql_path(path: &Path) -> bool {
 
 fn is_http_uri(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn group_by_maps_nested_fields_to_arrays() {
+        let result = QueryResult::new(vec![
+            json!({
+                "text": "test",
+                "object": {
+                    "number": 42
+                }
+            }),
+            json!({
+                "text": "test2",
+                "object": {
+                    "number": 43
+                }
+            }),
+        ]);
+        let mapping = vec![
+            MapExpr::Specific {
+                column: vec!["text".to_string()],
+                value: CaluculatedValue::Reference(vec!["text".to_string()]),
+            },
+            MapExpr::Specific {
+                column: vec!["object".to_string()],
+                value: CaluculatedValue::Reference(vec!["object".to_string()]),
+            },
+        ];
+
+        let grouped = apply_group_by(result, &[ALL_COLUMNS.to_string()], &mapping).unwrap();
+
+        assert_eq!(
+            grouped.rows,
+            vec![json!({
+                "text": ["test", "test2"],
+                "object": {
+                    "number": [42, 43]
+                }
+            })]
+        );
+    }
+
+    #[test]
+    fn group_by_aggregates_use_grouped_field_arrays() {
+        let result = QueryResult::new(vec![
+            json!({
+                "id": 1,
+                "number": 42,
+                "date": "2026-01-01"
+            }),
+            json!({
+                "id": 2,
+                "number": 43,
+                "date": "2026-01-03"
+            }),
+        ]);
+        let mapping = vec![
+            MapExpr::Specific {
+                column: vec!["ids".to_string()],
+                value: CaluculatedValue::FunctionCall {
+                    function: "ARRAY".to_string(),
+                    parameters: vec![CaluculatedValue::Reference(vec!["id".to_string()])],
+                },
+            },
+            MapExpr::Specific {
+                column: vec!["total".to_string()],
+                value: CaluculatedValue::FunctionCall {
+                    function: "SUM".to_string(),
+                    parameters: vec![CaluculatedValue::Reference(vec!["number".to_string()])],
+                },
+            },
+            MapExpr::Specific {
+                column: vec!["count".to_string()],
+                value: CaluculatedValue::FunctionCall {
+                    function: "COUNT".to_string(),
+                    parameters: vec![CaluculatedValue::Reference(vec!["id".to_string()])],
+                },
+            },
+            MapExpr::Specific {
+                column: vec!["last_date".to_string()],
+                value: CaluculatedValue::FunctionCall {
+                    function: "MAXDATE".to_string(),
+                    parameters: vec![CaluculatedValue::Reference(vec!["date".to_string()])],
+                },
+            },
+        ];
+
+        let grouped = apply_group_by(result, &[ALL_COLUMNS.to_string()], &mapping).unwrap();
+
+        assert_eq!(
+            grouped.rows,
+            vec![json!({
+                "ids": [1, 2],
+                "total": 85,
+                "count": 2,
+                "last_date": "2026-01-03"
+            })]
+        );
+    }
 }

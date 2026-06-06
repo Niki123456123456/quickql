@@ -86,6 +86,7 @@ impl CaluculatedValue {
                     "SUM" => {
                         let sum: f64 = values
                             .iter()
+                            .flat_map(flatten_value)
                             .map(|value| match value {
                                 Value::Number(number) => number.as_f64().unwrap_or(0.0),
                                 Value::String(text) => text.parse::<f64>().unwrap_or(0.0),
@@ -98,7 +99,10 @@ impl CaluculatedValue {
                             serde_json::json!(sum)
                         }
                     }
-                    "ARRAY" => Value::Array(values),
+                    "ARRAY" => {
+                        Value::Array(values.iter().flat_map(flatten_value).cloned().collect())
+                    }
+                    "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => serde_json::json!(values.len()),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
@@ -110,8 +114,22 @@ impl CaluculatedValue {
                         .filter(|date| !date.trim().is_empty())
                         .map(|date| Value::String(date.trim().to_string()))
                         .unwrap_or(Value::Null),
-                    "MINDATE" => aggregate_date(&values, DateAggregate::Min),
-                    "MAXDATE" => aggregate_date(&values, DateAggregate::Max),
+                    "MINDATE" => aggregate_date(
+                        &values
+                            .iter()
+                            .flat_map(flatten_value)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        DateAggregate::Min,
+                    ),
+                    "MAXDATE" => aggregate_date(
+                        &values
+                            .iter()
+                            .flat_map(flatten_value)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        DateAggregate::Max,
+                    ),
                     _ => Value::Null,
                 }
             }
@@ -148,6 +166,13 @@ fn aggregate_date(rows: &[Value], aggregate: DateAggregate) -> Value {
     selected
         .map(|(_, date_text)| Value::String(date_text))
         .unwrap_or(Value::Null)
+}
+
+fn flatten_value(value: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
+    match value {
+        Value::Array(values) => Box::new(values.iter()),
+        value => Box::new(std::iter::once(value)),
+    }
 }
 
 fn value_truthy(value: &Value) -> bool {
