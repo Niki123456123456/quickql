@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -62,6 +63,8 @@ pub enum MapExpr {
 pub enum CaluculatedValue {
     Reference(Vec<String>),
     Static(Value),
+    Object(Vec<(String, CaluculatedValue)>),
+    Array(Vec<CaluculatedValue>),
     FunctionCall {
         function: String,
         parameters: Vec<CaluculatedValue>,
@@ -85,6 +88,19 @@ impl CaluculatedValue {
                 .cloned()
                 .unwrap_or(Value::Null),
             CaluculatedValue::Static(value) => value.clone(),
+            CaluculatedValue::Object(entries) => {
+                let mut output = serde_json::Map::new();
+                for (key, entry) in entries {
+                    output.insert(key.clone(), entry.caluculate(value, query_path, ql_stack));
+                }
+                Value::Object(output)
+            }
+            CaluculatedValue::Array(entries) => Value::Array(
+                entries
+                    .iter()
+                    .map(|entry| entry.caluculate(value, query_path, ql_stack))
+                    .collect(),
+            ),
             CaluculatedValue::FunctionCall {
                 function,
                 parameters,
@@ -160,6 +176,11 @@ impl CaluculatedValue {
                             .map(value_to_string)
                             .collect(),
                     ),
+                    "BASE64" => values
+                        .first()
+                        .map(value_to_string)
+                        .map(|value| Value::String(BASE64_STANDARD.encode(value)))
+                        .unwrap_or(Value::Null),
                     _ => Value::Null,
                 }
             }

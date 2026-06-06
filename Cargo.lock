@@ -874,6 +874,7 @@ name = "quickql-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "csv",
  "pest",
  "pest_derive",

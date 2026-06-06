@@ -190,8 +190,8 @@ fn parse_value(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
     let inner = pair.into_inner().next().context("Empty value")?;
     match inner.as_rule() {
         Rule::function_call => parse_function_call(inner),
-        Rule::json_object => Ok(CaluculatedValue::Static(parse_json_object(inner)?)),
-        Rule::json_array => Ok(CaluculatedValue::Static(parse_json_array(inner)?)),
+        Rule::json_object => parse_json_object(inner),
+        Rule::json_array => parse_json_array(inner),
         Rule::single_quoted_string | Rule::double_quoted_string => {
             Ok(CaluculatedValue::Static(Value::String(pair_text(inner).to_string())))
         }
@@ -226,15 +226,15 @@ fn parse_function_call(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
     })
 }
 
-fn parse_json_object(pair: Pair<'_, Rule>) -> Result<Value> {
-    let mut map = serde_json::Map::new();
+fn parse_json_object(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
+    let mut entries = Vec::new();
     for kv in pair.into_inner().filter(|p| p.as_rule() == Rule::json_kv) {
         let mut kv_children = kv.into_inner();
         let key = parse_json_key(kv_children.next().context("JSON object: missing key")?)?;
         let val_pair = kv_children.next().context("JSON object: missing value")?;
-        map.insert(key, parse_json_literal(val_pair)?);
+        entries.push((key, parse_value(val_pair)?));
     }
-    Ok(Value::Object(map))
+    Ok(CaluculatedValue::Object(entries))
 }
 
 fn parse_json_key(pair: Pair<'_, Rule>) -> Result<String> {
@@ -248,36 +248,13 @@ fn parse_json_key(pair: Pair<'_, Rule>) -> Result<String> {
     }
 }
 
-fn parse_json_array(pair: Pair<'_, Rule>) -> Result<Value> {
+fn parse_json_array(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
     let values = pair
         .into_inner()
         .filter(|p| p.as_rule() == Rule::value)
-        .map(parse_json_literal)
+        .map(parse_value)
         .collect::<Result<Vec<_>>>()?;
-    Ok(Value::Array(values))
-}
-
-fn parse_json_literal(pair: Pair<'_, Rule>) -> Result<Value> {
-    let inner = pair.into_inner().next().context("Empty JSON literal")?;
-    match inner.as_rule() {
-        Rule::json_object => parse_json_object(inner),
-        Rule::json_array => parse_json_array(inner),
-        Rule::single_quoted_string | Rule::double_quoted_string => {
-            Ok(Value::String(pair_text(inner).to_string()))
-        }
-        Rule::bool_literal => {
-            Ok(Value::Bool(inner.as_str().to_ascii_lowercase() == "true"))
-        }
-        Rule::number => {
-            let CaluculatedValue::Static(v) = parse_number(inner.as_str())? else {
-                unreachable!()
-            };
-            Ok(v)
-        }
-        Rule::identifier => bail!("Column references are not allowed inside JSON literals"),
-        Rule::function_call => bail!("Function calls are not allowed inside JSON literals"),
-        rule => bail!("Unsupported JSON literal type: {rule:?}"),
-    }
+    Ok(CaluculatedValue::Array(values))
 }
 
 fn parse_number(s: &str) -> Result<CaluculatedValue> {
@@ -353,6 +330,27 @@ mod tests {
             query,
             Query {
                 steps: vec![SubQuery::Map(vec![MapExpr::All])]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_function_call_inside_json_object() {
+        let query = parse_query("MAP payload = { token: BASE64(name) }").unwrap();
+
+        assert_eq!(
+            query,
+            Query {
+                steps: vec![SubQuery::Map(vec![MapExpr::Specific {
+                    column: vec!["payload".to_string()],
+                    value: CaluculatedValue::Object(vec![(
+                        "token".to_string(),
+                        CaluculatedValue::FunctionCall {
+                            function: "BASE64".to_string(),
+                            parameters: vec![CaluculatedValue::Reference(vec!["name".to_string()])],
+                        },
+                    )]),
+                }])]
             }
         );
     }
