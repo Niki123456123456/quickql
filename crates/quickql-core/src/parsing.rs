@@ -156,6 +156,7 @@ fn collect_map_items(pair: Pair<'_, Rule>) -> Result<Vec<MapExpr>> {
 fn parse_map_item(pair: Pair<'_, Rule>) -> Result<MapExpr> {
     let inner = pair.into_inner().next().context("Empty map item")?;
     match inner.as_rule() {
+        Rule::all_columns => Ok(MapExpr::All),
         Rule::assignment => {
             let (col, val) = parse_assignment(inner)?;
             Ok(MapExpr::Specific {
@@ -338,4 +339,21 @@ pub(crate) fn parse_sources(line: &str) -> Result<Vec<CaluculatedValue>> {
         .find(|pair| pair.as_rule() == Rule::source_stmt)
         .context("SOURCE must include at least one source")?;
     parse_source_stmt(source_stmt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_map_star_as_all_columns() {
+        let query = parse_query("MAP *").unwrap();
+
+        assert_eq!(
+            query,
+            Query {
+                steps: vec![SubQuery::Map(vec![MapExpr::All])]
+            }
+        );
+    }
 }

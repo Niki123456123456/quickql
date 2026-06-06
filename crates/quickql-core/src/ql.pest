@@ -15,7 +15,7 @@ order_by_stmt = { ^"ORDER_BY" ~ hspace+ ~ order_key_list }
 value_list  = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
 
 map_item_list = { map_item ~ (hspace* ~ "," ~ hspace* ~ map_item)* }
-map_item      = { assignment | value }
+map_item      = { all_columns | assignment | value }
 
 group_key_list = { identifier ~ (hspace* ~ "," ~ hspace* ~ identifier)* }
 
@@ -39,6 +39,7 @@ number       = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 identifier = @{ ident ~ ("." ~ ident)* }
 ident      = @{ (ASCII_ALPHANUMERIC | "_")+ }
+all_columns = @{ "*" }
 
 single_quoted_string = @{ "'" ~ ( "\\'" | !("'" | NEWLINE) ~ ANY )* ~ "'" }
 double_quoted_string = @{ "\"" ~ ( "\\\"" | !("\"" | NEWLINE) ~ ANY )* ~ "\"" }
