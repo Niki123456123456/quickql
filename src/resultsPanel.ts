@@ -6,7 +6,7 @@ export interface QueryResult {
   pageSize: number;
   elapsedMs: number;
   source: string;
-  pages: Map<number, unknown[][]>;
+  pages: Map<number, Record<string, unknown>[]>;
 }
 
 export class ResultsViewProvider implements vscode.WebviewViewProvider {
@@ -36,7 +36,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     this.render();
   }
 
-  private async readRows(start: number, count: number): Promise<unknown[][]> {
+  private async readRows(start: number, count: number): Promise<Record<string, unknown>[]> {
     if (!this.result) {
       return [];
     }
@@ -47,11 +47,11 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       return [];
     }
 
-    const rows: unknown[][] = [];
+    const rows: Record<string, unknown>[] = [];
     for (let rowIndex = safeStart; rowIndex < safeStart + safeCount; rowIndex += 1) {
       const pageStart = Math.floor(rowIndex / this.result.pageSize) * this.result.pageSize;
       const page = this.result.pages.get(pageStart);
-      rows.push(page?.[rowIndex - pageStart] ?? []);
+      rows.push(page?.[rowIndex - pageStart] ?? {});
     }
     return rows;
   }
@@ -225,8 +225,8 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       const rows = collectRows(firstVisible, visibleCount);
       viewport.style.transform = 'translateY(' + (firstVisible * rowHeight) + 'px)';
       viewport.innerHTML = rows.map(item => {
-        const row = item.row || [];
-        return '<div class="row">' + columns.map((_, i) => '<div class="cell" title="' + escapeAttr(format(row[i])) + '">' + escapeHtml(format(row[i])) + '</div>').join('') + '</div>';
+        const row = item.row || {};
+        return '<div class="row">' + columns.map(col => '<div class="cell" title="' + escapeAttr(format(row[col])) + '">' + escapeHtml(format(row[col])) + '</div>').join('') + '</div>';
       }).join('');
     }
 
@@ -238,7 +238,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         if (page) {
           result.push({ row: page[rowIndex - pageStart] });
         } else {
-          result.push({ row: columns.map(() => '') });
+          result.push({ row: {} });
         }
       }
       return result;

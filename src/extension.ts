@@ -90,13 +90,13 @@ interface StreamMeta {
 
 interface StreamRow {
   type: 'row';
-  row: unknown[];
+  row: Record<string, unknown>;
 }
 
 interface StreamBatch {
   type: 'batch';
   start: number;
-  rows: unknown[][];
+  rows: Record<string, unknown>[];
 }
 
 interface StreamDone {
@@ -119,7 +119,7 @@ function runEngine(engine: string, queryPath: string, cwd: string, pageSize: num
     let source = queryPath;
     let rowCount = 0;
     let elapsedMs = 0;
-    const pages = new Map<number, unknown[][]>();
+    const pages = new Map<number, Record<string, unknown>[]>();
 
     child.stdout.on('data', chunk => {
       stdoutBuffer += chunk.toString();
@@ -193,11 +193,11 @@ function runEngine(engine: string, queryPath: string, cwd: string, pageSize: num
       }
     }
 
-    function appendRow(row: unknown[]): void {
+    function appendRow(row: Record<string, unknown>): void {
       const pageStart = Math.floor(rowCount / pageSize) * pageSize;
       let page = pages.get(pageStart);
       if (!page) {
-        page = [];
+        page = [] as Record<string, unknown>[];
         pages.set(pageStart, page);
       }
       page.push(row);

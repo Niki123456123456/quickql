@@ -1,0 +1,48 @@
+query       = { SOI ~ line* ~ final_line ~ EOI }
+source_only = { SOI ~ hspace* ~ source_stmt ~ hspace* ~ comment? ~ EOI }
+
+line       = _{ hspace* ~ statement? ~ hspace* ~ comment? ~ NEWLINE+ }
+final_line = _{ hspace* ~ statement? ~ hspace* ~ comment? }
+statement  = { source_stmt | map_many_stmt | group_by_stmt | order_by_stmt | filter_stmt | map_stmt }
+
+source_stmt   = { ^"SOURCE" ~ hspace+ ~ value_list }
+map_stmt      = { ^"MAP" ~ hspace+ ~ map_item_list }
+filter_stmt   = { ^"FILTER" ~ hspace+ ~ value_list }
+map_many_stmt = { ^"MAP_MANY" ~ hspace+ ~ identifier }
+group_by_stmt = { ^"GROUP_BY" ~ hspace+ ~ group_key_list ~ (hspace+ ~ ^"MAP" ~ hspace+ ~ map_item_list)? }
+order_by_stmt = { ^"ORDER_BY" ~ hspace+ ~ order_key_list }
+
+value_list  = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
+
+map_item_list = { map_item ~ (hspace* ~ "," ~ hspace* ~ map_item)* }
+map_item      = { assignment | value }
+
+group_key_list = { identifier ~ (hspace* ~ "," ~ hspace* ~ identifier)* }
+
+order_key_list = { order_key ~ (hspace* ~ "," ~ hspace* ~ order_key)* }
+order_key      = { identifier ~ (hspace+ ~ sort_direction)? }
+sort_direction = @{ (^"ASC" | ^"DESC") ~ !(ASCII_ALPHANUMERIC | "_") }
+
+assignment = { identifier ~ hspace* ~ "=" ~ hspace* ~ value }
+
+value         = { function_call | json_object | json_array | quoted_string | bool_literal | number | identifier }
+function_call = { ident ~ hspace* ~ "(" ~ hspace* ~ function_args? ~ hspace* ~ ")" }
+function_args = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
+
+json_object = { "{" ~ hspace* ~ (json_kv ~ (hspace* ~ "," ~ hspace* ~ json_kv)*)? ~ hspace* ~ "}" }
+json_kv     = { json_key ~ hspace* ~ ":" ~ hspace* ~ value }
+json_key    = { ident | single_quoted_string | double_quoted_string }
+json_array  = { "[" ~ hspace* ~ (value ~ (hspace* ~ "," ~ hspace* ~ value)*)? ~ hspace* ~ "]" }
+
+bool_literal = @{ (^"true" | ^"false") ~ !(ASCII_ALPHANUMERIC | "_") }
+number       = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+identifier = @{ ident ~ ("." ~ ident)* }
+ident      = @{ (ASCII_ALPHANUMERIC | "_")+ }
+
+single_quoted_string = @{ "'" ~ ( "\\'" | !("'" | NEWLINE) ~ ANY )* ~ "'" }
+double_quoted_string = @{ "\"" ~ ( "\\\"" | !("\"" | NEWLINE) ~ ANY )* ~ "\"" }
+quoted_string        = _{ single_quoted_string | double_quoted_string }
+
+comment = _{ "--" ~ (!NEWLINE ~ ANY)* }
+hspace  = _{ " " | "\t" }
