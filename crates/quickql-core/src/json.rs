@@ -41,49 +41,90 @@ pub(crate) fn load_json_http_source(
             Ok((name, value))
         })
         .collect::<Result<Vec<_>>>()?;
-    let paging = paging.map(parse_paging_config).transpose()?;
-
-    let mut result = send_json_request(
-        &client,
-        method.clone(),
-        uri,
-        &headers,
-        body,
-        None,
-        &method_label,
-    )?;
-
-    let Some(paging) = paging else {
-        return Ok(result);
-    };
-
-    let mut seen_cursors = HashSet::new();
-    for _ in 0..MAX_PAGES {
-        let Some(cursor) = value_at_path(&result, &paging.from.path).cloned() else {
-            return Ok(result);
-        };
-        if cursor.is_null() {
-            return Ok(result);
-        }
-
-        let cursor_key = value_to_cursor_string(&cursor);
-        if cursor_key.is_empty() || !seen_cursors.insert(cursor_key) {
-            return Ok(result);
-        }
-
-        let page = send_json_request(
+    match paging.map(parse_paging_config).transpose()? {
+        None => send_json_request(
             &client,
-            method.clone(),
+            method,
             uri,
             &headers,
             body,
-            Some((&paging.cursor_in, &cursor)),
+            None,
             &method_label,
-        )?;
-        merge_page(&mut result, page);
-    }
+        ),
+        Some(PagingConfig::Cursor { cursor_in, from }) => {
+            let mut result = send_json_request(
+                &client,
+                method.clone(),
+                uri,
+                &headers,
+                body,
+                None,
+                &method_label,
+            )?;
 
-    bail!("HTTP JSON source {uri} exceeded pagination limit of {MAX_PAGES} pages")
+            let mut seen_cursors = HashSet::new();
+            for _ in 0..MAX_PAGES {
+                let Some(cursor) = value_at_path(&result, &from.path).cloned() else {
+                    return Ok(result);
+                };
+                if cursor.is_null() {
+                    return Ok(result);
+                }
+
+                let cursor_key = value_to_cursor_string(&cursor);
+                if cursor_key.is_empty() || !seen_cursors.insert(cursor_key) {
+                    return Ok(result);
+                }
+
+                let page = send_json_request(
+                    &client,
+                    method.clone(),
+                    uri,
+                    &headers,
+                    body,
+                    Some((&cursor_in, &cursor)),
+                    &method_label,
+                )?;
+                merge_page(&mut result, page);
+            }
+
+            bail!("HTTP JSON source {uri} exceeded pagination limit of {MAX_PAGES} pages")
+        }
+        Some(PagingConfig::Offset {
+            offset_in,
+            path,
+            page_size,
+        }) => {
+            let mut result = Value::Null;
+            let mut offset = 0usize;
+            for page_index in 0..MAX_PAGES {
+                let offset_value = serde_json::json!(offset);
+                let page = send_json_request(
+                    &client,
+                    method.clone(),
+                    uri,
+                    &headers,
+                    body,
+                    Some((&offset_in, &offset_value)),
+                    &method_label,
+                )?;
+                let entry_count = entry_count_at_path(&page, &path);
+                if page_index == 0 {
+                    result = page;
+                } else {
+                    merge_page(&mut result, page);
+                }
+
+                if entry_count < page_size {
+                    return Ok(result);
+                }
+
+                offset += page_size;
+            }
+
+            bail!("HTTP JSON source {uri} exceeded pagination limit of {MAX_PAGES} pages")
+        }
+    }
 }
 
 fn send_json_request(
@@ -130,9 +171,16 @@ fn send_json_request(
 }
 
 #[derive(Debug, Clone)]
-struct PagingConfig {
-    cursor_in: PagingCursorLocation,
-    from: PagingCursorLocation,
+enum PagingConfig {
+    Cursor {
+        cursor_in: PagingCursorLocation,
+        from: PagingCursorLocation,
+    },
+    Offset {
+        offset_in: PagingCursorLocation,
+        path: String,
+        page_size: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -155,23 +203,52 @@ fn parse_paging_config(value: &Value) -> Result<PagingConfig> {
         .get("type")
         .and_then(Value::as_str)
         .context("HTTP paging config requires type")?;
-    if !paging_type.eq_ignore_ascii_case("cursor") {
-        bail!("Unsupported HTTP paging type {paging_type}");
-    }
+    match paging_type.to_ascii_lowercase().as_str() {
+        "cursor" => {
+            let cursor_in = parse_paging_location(
+                obj.get("in")
+                    .context("HTTP cursor paging config requires in")?,
+            )?;
+            let from = parse_paging_location(
+                obj.get("from")
+                    .context("HTTP cursor paging config requires from")?,
+            )?;
+            if !matches!(from.location, PagingLocation::Body) {
+                bail!("HTTP cursor paging from.location currently only supports body");
+            }
 
-    let cursor_in = parse_paging_location(
-        obj.get("in")
-            .context("HTTP cursor paging config requires in")?,
-    )?;
-    let from = parse_paging_location(
-        obj.get("from")
-            .context("HTTP cursor paging config requires from")?,
-    )?;
-    if !matches!(from.location, PagingLocation::Body) {
-        bail!("HTTP cursor paging from.location currently only supports body");
-    }
+            Ok(PagingConfig::Cursor { cursor_in, from })
+        }
+        "offset" => {
+            let offset_in = parse_paging_location(
+                obj.get("in")
+                    .context("HTTP offset paging config requires in")?,
+            )?;
+            let path = obj
+                .get("path")
+                .and_then(Value::as_str)
+                .context("HTTP offset paging config requires path")?
+                .to_string();
+            if path.trim().is_empty() {
+                bail!("HTTP offset paging path cannot be empty");
+            }
+            let page_size = obj
+                .get("pagesize")
+                .and_then(Value::as_u64)
+                .context("HTTP offset paging config requires pagesize")?
+                as usize;
+            if page_size == 0 {
+                bail!("HTTP offset paging pagesize must be greater than zero");
+            }
 
-    Ok(PagingConfig { cursor_in, from })
+            Ok(PagingConfig::Offset {
+                offset_in,
+                path,
+                page_size,
+            })
+        }
+        _ => bail!("Unsupported HTTP paging type {paging_type}"),
+    }
 }
 
 fn parse_paging_location(value: &Value) -> Result<PagingCursorLocation> {
@@ -206,6 +283,14 @@ fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         Value::Object(map) => map.get(part),
         _ => None,
     })
+}
+
+fn entry_count_at_path(value: &Value, path: &str) -> usize {
+    match value_at_path(value, path) {
+        Some(Value::Array(values)) => values.len(),
+        Some(Value::Object(values)) => values.len(),
+        _ => 0,
+    }
 }
 
 fn set_value_at_path(value: &mut Value, path: &str, new_value: Value) {
@@ -318,5 +403,57 @@ mod tests {
 
         assert_eq!(value["items"], json!([1, 2]));
         assert!(server.join().unwrap().starts_with("GET /items?cursor=abc "));
+    }
+
+    #[test]
+    fn offset_paging_starts_at_zero_and_stops_when_page_is_not_full() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for index in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 4096];
+                let bytes_read = stream.read(&mut buffer).unwrap();
+                requests.push(String::from_utf8_lossy(&buffer[..bytes_read]).to_string());
+
+                let body = match index {
+                    0 => r#"{"items":[1,2]}"#,
+                    1 => r#"{"items":[3,4]}"#,
+                    _ => r#"{"items":[5]}"#,
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+            requests
+        });
+
+        let value = load_json_http_source(
+            reqwest::Method::GET,
+            &format!("http://{addr}/items"),
+            HashMap::new(),
+            None,
+            Some(&json!({
+                "type": "offset",
+                "in": {
+                    "location": "query",
+                    "path": "offset"
+                },
+                "path": "items",
+                "pagesize": 2
+            })),
+        )
+        .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(value["items"], json!([1, 2, 3, 4, 5]));
+        assert!(requests[0].starts_with("GET /items?offset=0 "));
+        assert!(requests[1].starts_with("GET /items?offset=2 "));
+        assert!(requests[2].starts_with("GET /items?offset=4 "));
     }
 }
