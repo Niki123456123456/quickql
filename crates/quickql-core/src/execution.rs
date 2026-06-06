@@ -252,11 +252,11 @@ fn load_sources(
 
 pub fn load_query_source(
     query_path: &Path,
-    source: &str,
     ql_stack: &mut Vec<PathBuf>,
+    source: &str, headers : HashMap<&str, &str>
 ) -> Result<Value>{
     if is_http_uri(source) {
-        return load_json_http_source(source);
+        return load_json_http_source(source, headers);
     }
 
     let source_path = resolve_source(query_path, source);

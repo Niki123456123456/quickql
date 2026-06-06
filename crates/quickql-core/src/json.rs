@@ -1,9 +1,11 @@
-use crate::*;
 use anyhow::{Context, Result};
+use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -16,15 +18,19 @@ pub(crate) fn load_json_source(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
-pub(crate) fn load_json_http_source(uri: &str) -> Result<Value> {
+pub(crate) fn load_json_http_source(uri: &str, headers: HashMap<&str, &str>) -> Result<Value> {
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
         .context("Building HTTP client")?;
-    let request = client.get(uri);
-    // for header in headers {
-    //     request = request.header(header.name.as_str(), header.value.as_str());
-    // }
+    let mut request = client.get(uri);
+    for (name, value) in headers {
+        let name = HeaderName::from_str(name)
+            .with_context(|| format!("Invalid HTTP header name {name}"))?;
+        let value = HeaderValue::from_str(value)
+            .with_context(|| format!("Invalid HTTP header value for {name}"))?;
+        request = request.header(name, value);
+    }
 
     let value: Value = request
         .send()

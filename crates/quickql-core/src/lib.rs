@@ -143,7 +143,21 @@ impl CaluculatedValue {
                     ),
                     "OPEN" => {
                         if let Some(Value::String(source)) = values.first() {
-                          return execution::load_query_source(query_path, source, ql_stack).unwrap_or_default();
+                            return execution::load_query_source(query_path, ql_stack, source, Default::default())
+                                .unwrap_or_default();
+                        }
+                        if let Some(Value::Object(obj)) = values.first() {
+                            let src = obj.get("src").and_then(|x| x.as_str()).unwrap_or_default();
+                            let mut headers: HashMap<&str, &str> = Default::default();
+                            if let Some(source_headers) = obj.get("headers").and_then(|x| x.as_object()) {
+                                for (key, value) in source_headers.iter() {
+                                    if let Some(value) = value.as_str() {
+                                        headers.insert(key.as_str(), value);
+                                    }
+                                }
+                            }
+                            return execution::load_query_source(query_path, ql_stack, src, headers)
+                                .unwrap_or_default();
                         }
                         return Value::Null;
                     }
