@@ -257,9 +257,10 @@ pub fn load_query_source(
     method: reqwest::Method,
     headers: HashMap<&str, &str>,
     body: Option<&Value>,
+    paging: Option<&Value>,
 ) -> Result<Value> {
     if is_http_uri(source) {
-        return load_json_http_source(method, source, headers, body);
+        return load_json_http_source(method, source, headers, body, paging);
     }
 
     let source_path = resolve_source(query_path, source);

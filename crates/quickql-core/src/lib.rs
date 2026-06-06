@@ -201,6 +201,7 @@ impl CaluculatedValue {
                 method,
                 Default::default(),
                 None,
+                None,
             )
             .unwrap_or_default();
         }
@@ -222,6 +223,7 @@ impl CaluculatedValue {
                 method,
                 headers,
                 obj.get("body"),
+                obj.get("paging"),
             )
             .unwrap_or_default();
         }
