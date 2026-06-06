@@ -41,7 +41,7 @@ pub enum SubQuery {
         keys: Vec<String>,
         mapping: Vec<MapExpr>,
     },
-    OrderBy(Vec<SortKey>),
+    SortBy(Vec<SortKey>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

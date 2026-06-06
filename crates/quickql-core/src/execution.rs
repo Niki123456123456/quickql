@@ -159,7 +159,7 @@ fn execute_pipeline_with_stack(
             SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
             SubQuery::MapMany(field) => apply_map_many(result, field)?,
             SubQuery::GroupBy { keys, mapping } => apply_group_by(result, keys, mapping, query_path, ql_stack)?,
-            SubQuery::OrderBy(sort_keys) => apply_order_by(result, sort_keys),
+            SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
         };
     }
 
@@ -359,7 +359,7 @@ fn apply_group_by(
     Ok(QueryResult::new(output_rows))
 }
 
-fn apply_order_by(result: QueryResult, sort_keys: &[SortKey]) -> QueryResult {
+fn apply_sort_by(result: QueryResult, sort_keys: &[SortKey]) -> QueryResult {
     let mut rows = result.rows;
     rows.sort_by(|a, b| {
         for key in sort_keys {

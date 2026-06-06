@@ -27,7 +27,7 @@ fn parse_statement(pair: Pair<'_, Rule>) -> Result<SubQuery> {
         Rule::filter_stmt   => Ok(SubQuery::Filter(parse_filter_stmt(statement)?)),
         Rule::map_many_stmt => Ok(SubQuery::MapMany(parse_map_many_stmt(statement)?)),
         Rule::group_by_stmt => parse_group_by_stmt(statement),
-        Rule::order_by_stmt => parse_order_by_stmt(statement),
+        Rule::sort_by_stmt => parse_sort_by_stmt(statement),
         rule => bail!("Unsupported query statement: {rule:?}"),
     }
 }
@@ -98,30 +98,30 @@ fn parse_group_by_stmt(pair: Pair<'_, Rule>) -> Result<SubQuery> {
     Ok(SubQuery::GroupBy { keys, mapping })
 }
 
-fn parse_order_by_stmt(pair: Pair<'_, Rule>) -> Result<SubQuery> {
+fn parse_sort_by_stmt(pair: Pair<'_, Rule>) -> Result<SubQuery> {
     let key_list = pair
         .into_inner()
-        .find(|p| p.as_rule() == Rule::order_key_list)
-        .context("ORDER_BY requires at least one column")?;
+        .find(|p| p.as_rule() == Rule::sort_key_list)
+        .context("SORT_BY requires at least one column")?;
 
     let keys = key_list
         .into_inner()
-        .filter(|p| p.as_rule() == Rule::order_key)
-        .map(parse_order_key)
+        .filter(|p| p.as_rule() == Rule::sort_key)
+        .map(parse_sort_key)
         .collect::<Result<Vec<_>>>()?;
 
     if keys.is_empty() {
-        bail!("ORDER_BY requires at least one column");
+        bail!("SORT_BY requires at least one column");
     }
 
-    Ok(SubQuery::OrderBy(keys))
+    Ok(SubQuery::SortBy(keys))
 }
 
-fn parse_order_key(pair: Pair<'_, Rule>) -> Result<SortKey> {
+fn parse_sort_key(pair: Pair<'_, Rule>) -> Result<SortKey> {
     let mut children = pair.into_inner();
     let column = children
         .next()
-        .context("ORDER_BY: missing column name")?
+        .context("SORT_BY: missing column name")?
         .as_str()
         .to_string();
     let direction = match children
