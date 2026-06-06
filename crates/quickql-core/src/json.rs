@@ -8,15 +8,15 @@ use std::time::Duration;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-pub(crate) fn load_json_source(path: &Path) -> Result<QueryResult> {
+pub(crate) fn load_json_source(path: &Path) -> Result<Value> {
     let file =
         File::open(path).with_context(|| format!("Opening JSON source {}", path.display()))?;
     let value: Value =
         serde_json::from_reader(BufReader::new(file)).context("Parsing JSON source")?;
-    query_result_from_json_value(value)
+    Ok(value)
 }
 
-pub(crate) fn load_json_http_source(uri: &str) -> Result<QueryResult> {
+pub(crate) fn load_json_http_source(uri: &str) -> Result<Value> {
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
@@ -33,13 +33,5 @@ pub(crate) fn load_json_http_source(uri: &str) -> Result<QueryResult> {
         .with_context(|| format!("GET JSON source {uri} returned an error status"))?
         .json()
         .with_context(|| format!("Parsing JSON response from {uri}"))?;
-    query_result_from_json_value(value)
-}
-
-pub(crate) fn query_result_from_json_value(value: Value) -> Result<QueryResult> {
-    let items: Vec<Value> = match value {
-        Value::Array(items) => items,
-        single => vec![single],
-    };
-    Ok(QueryResult::new(items))
+    Ok(value)
 }

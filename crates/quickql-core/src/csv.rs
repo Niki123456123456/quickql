@@ -1,11 +1,11 @@
-use crate::QueryResult;
+
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) fn load_csv_source(path: &Path) -> Result<QueryResult> {
+pub(crate) fn load_csv_source(path: &Path) -> Result<Value> {
     let mut reader = csv_reader_from_path(path)?;
     let columns: Vec<String> = reader
         .headers()
@@ -30,7 +30,7 @@ pub(crate) fn load_csv_source(path: &Path) -> Result<QueryResult> {
             Ok(Value::Object(row))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(QueryResult::new(rows))
+    Ok(Value::Array(rows))
 }
 
 pub(crate) fn csv_fields_from_source(source_path: &Path) -> Result<Vec<String>> {

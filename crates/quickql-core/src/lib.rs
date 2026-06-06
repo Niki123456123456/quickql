@@ -143,11 +143,7 @@ impl CaluculatedValue {
                     ),
                     "OPEN" => {
                         if let Some(Value::String(source)) = values.first() {
-                            if let Ok(result) =
-                                execution::load_query_source(query_path, source, ql_stack)
-                            {
-                                return Value::Array(result.rows);
-                            }
+                          return execution::load_query_source(query_path, source, ql_stack).unwrap_or_default();
                         }
                         return Value::Null;
                     }

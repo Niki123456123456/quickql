@@ -254,7 +254,7 @@ pub fn load_query_source(
     query_path: &Path,
     source: &str,
     ql_stack: &mut Vec<PathBuf>,
-) -> Result<QueryResult> {
+) -> Result<Value>{
     if is_http_uri(source) {
         return load_json_http_source(source);
     }
@@ -263,7 +263,8 @@ pub fn load_query_source(
     if is_csv_path(&source_path) {
         load_csv_source(&source_path)
     } else if is_ql_path(&source_path) {
-        load_ql_source(&source_path, ql_stack)
+        let result = load_ql_source(&source_path, ql_stack)?;
+        return Ok(Value::Array(result.rows));
     } else {
         load_json_source(&source_path)
     }
