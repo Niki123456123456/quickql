@@ -26,6 +26,8 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       if (message?.type === 'page' && this.result) {
         const rows = await this.readRows(message.start, message.count);
         await this.view?.webview.postMessage({ type: 'page', start: message.start, rows });
+      } else if (message?.type === 'openJson' && this.result) {
+        await this.openJsonResult(this.result);
       }
     }, undefined, this.context.subscriptions);
     this.render();
@@ -54,6 +56,27 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       rows.push(page?.[rowIndex - pageStart] ?? {});
     }
     return rows;
+  }
+
+  private readAllRows(result: QueryResult): Record<string, unknown>[] {
+    const rows: Record<string, unknown>[] = [];
+    for (let rowIndex = 0; rowIndex < result.rowCount; rowIndex += 1) {
+      const pageStart = Math.floor(rowIndex / result.pageSize) * result.pageSize;
+      const page = result.pages.get(pageStart);
+      rows.push(page?.[rowIndex - pageStart] ?? {});
+    }
+    return rows;
+  }
+
+  private async openJsonResult(result: QueryResult): Promise<void> {
+    const rows = this.readAllRows(result);
+    const document = await vscode.workspace.openTextDocument({
+      content: JSON.stringify(rows, null, 2),
+      language: 'json'
+    });
+    await vscode.window.showTextDocument(document, {
+      preview: false
+    });
   }
 
   private render(): void {
@@ -124,6 +147,31 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
       white-space: nowrap;
     }
+    .toolbar .meta {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .toolbar .source {
+      color: var(--fg);
+    }
+    .toolbar-spacer {
+      flex: 1 1 auto;
+    }
+    button {
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 2px;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      padding: 3px 9px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
     .table {
       position: relative;
       height: calc(100vh - 34px);
@@ -172,9 +220,11 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="toolbar">
-    <strong>${escapeHtml(result.source)}</strong>
-    <span>${result.rowCount.toLocaleString()} rows</span>
-    <span>${elapsed} ms</span>
+    <strong class="meta source" title="${escapeHtml(result.source)}">${escapeHtml(result.source)}</strong>
+    <span class="meta">${result.rowCount.toLocaleString()} rows</span>
+    <span class="meta">${elapsed} ms</span>
+    <span class="toolbar-spacer"></span>
+    <button id="openJson" type="button" title="Open results as JSON">Open JSON</button>
   </div>
   <div id="table" class="table">
     <div id="spacer" class="spacer">
@@ -192,8 +242,13 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const header = document.getElementById('header');
     const spacer = document.getElementById('spacer');
     const viewport = document.getElementById('viewport');
+    const openJson = document.getElementById('openJson');
     const cache = new Map();
     const pending = new Set();
+
+    openJson.addEventListener('click', () => {
+      vscode.postMessage({ type: 'openJson' });
+    });
 
     header.innerHTML = columns.map(c => '<div class="cell">' + escapeHtml(c) + '</div>').join('');
     spacer.style.height = ((rowCount * rowHeight) + rowHeight) + 'px';
