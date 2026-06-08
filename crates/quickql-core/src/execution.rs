@@ -568,31 +568,14 @@ fn group_key(values: &[Value]) -> String {
 }
 
 fn columns_from_descriptor(descriptor: &KeyDescriptor) -> Vec<String> {
-    fn collect(prefix: &str, descriptor: &KeyDescriptor, columns: &mut Vec<String>) {
-        match descriptor {
-            KeyDescriptor::Value => {
-                if !prefix.is_empty() {
-                    columns.push(prefix.to_string());
-                }
-            }
-            KeyDescriptor::Object(fields) => {
-                let mut keys = fields.keys().collect::<Vec<_>>();
-                keys.sort();
-                for key in keys {
-                    let path = if prefix.is_empty() {
-                        key.to_string()
-                    } else {
-                        format!("{prefix}.{key}")
-                    };
-                    collect(&path, &fields[key], columns);
-                }
-            }
+    match descriptor {
+        KeyDescriptor::Value => vec![],
+        KeyDescriptor::Object(fields) => {
+            let mut keys: Vec<String> = fields.keys().cloned().collect();
+            keys.sort();
+            keys
         }
     }
-
-    let mut columns = Vec::new();
-    collect("", descriptor, &mut columns);
-    columns
 }
 
 fn fields_from_json_prefix(input: &str) -> Vec<String> {
