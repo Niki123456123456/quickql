@@ -2,7 +2,7 @@
   "name": "quickql",
   "displayName": "QuickQL",
   "description": "Query JSON files from .ql documents with a Rust query engine and language server.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "NiklasNordkamp",
   "repository": {
     "type": "git",

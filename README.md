@@ -144,7 +144,7 @@ See [docs/values-and-expressions.md](docs/values-and-expressions.md) for full de
 **Install locally**
 
 ```sh
-code --install-extension quickql-0.0.2.vsix
+code --install-extension quickql-0.0.3.vsix
 ```
 
 **Build package**
