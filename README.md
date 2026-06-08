@@ -139,6 +139,20 @@ See [docs/functions.md](docs/functions.md) for full details and examples.
 
 See [docs/values-and-expressions.md](docs/values-and-expressions.md) for full details.
 
+## Development
+
+**Install locally**
+
+```sh
+code --install-extension quickql-0.0.2.vsix
+```
+
+**Build package**
+
+```sh
+vsce package
+```
+
 ## Detailed Documentation
 
 - [SOURCE](docs/source.md) — loading data
