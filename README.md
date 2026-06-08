@@ -1,132 +1,151 @@
 # QuickQL
 
-QuickQL is a VS Code extension for running `.ql` files against JSON and CSV data with a Rust query engine and Rust language server.
+A lightweight pipeline query language for transforming JSON, CSV, and HTTP data sources. QuickQL queries are plain text files (`.ql`) that describe a sequence of data transformation steps executed top to bottom.
 
-## Query Format
-
-QuickQL queries are line-based pipelines. Blank lines are ignored, and `--`
-starts a comment.
+## Quick Example
 
 ```ql
-SOURCE 'example.json'
-FILTER count = 7
-MAP count, search
-SORT_BY count DESC
+SOURCE OPEN('orders.json')
+FILTER EQ(status, 'shipped')
+MAP customer_id, total, shipped_date = GETDATE(shipped_at)
+GROUP_BY customer_id MAP total = SUM(total), last_ship = MAXDATE(shipped_date)
+SORT_BY last_ship DESC
 ```
 
-`SOURCE` reads one or more source files. Relative paths are resolved from the
-`.ql` file, and quotes around paths are optional. Separate multiple sources
-with commas to append their rows:
+## Statements
+
+Each line in a `.ql` file is one pipeline step. Steps are separated by newlines; comments start with `--`.
+
+| Statement | Description |
+|-----------|-------------|
+| [`SOURCE`](docs/source.md) | Load data from a file, URL, or inline literal |
+| [`MAP`](docs/map.md) | Select, rename, or compute columns |
+| [`FILTER`](docs/filter.md) | Keep only rows matching a condition |
+| [`MAP_MANY`](docs/map_many.md) | Flatten an array field into individual rows |
+| [`GROUP_BY`](docs/group_by.md) | Group rows by keys and aggregate |
+| [`SORT_BY`](docs/sort_by.md) | Sort rows by one or more columns |
+
+## Data Sources
+
+QuickQL can read:
+
+- **JSON files** — array of objects or a single object/array
+- **CSV files** — automatically detected by `.csv` extension
+- **HTTP endpoints** — `GET`, `POST`, or `PUT` with optional headers, body, and pagination
+- **Other `.ql` files** — compose queries by referencing them as sources
 
 ```ql
-SOURCE 'example.csv'
+-- JSON file
+SOURCE OPEN('data/users.json')
+
+-- CSV file
+SOURCE OPEN('reports/sales.csv')
+
+-- HTTP API
+SOURCE GET('https://api.example.com/users')
+
+-- Another query
+SOURCE OPEN('other_query.ql')
+
+-- Multiple sources merged
+SOURCE OPEN('users.json'), OPEN('admins.json')
+```
+
+## Transforming Data
+
+### Select and rename columns
+
+```ql
+SOURCE OPEN('users.json')
+MAP id, name, email
 ```
 
 ```ql
-SOURCE 'one.csv', 'two.csv'
+SOURCE OPEN('users.json')
+MAP id, full_name = name, contact = email
 ```
 
-HTTP JSON sources are loaded with a GET request. Add request headers after the
-source with `HEADERS`:
+### Compute new fields
 
 ```ql
-SOURCE 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
+SOURCE OPEN('orders.json')
+MAP *, total_with_tax = SUM(total, tax)
 ```
 
-JSON sources may be a single object or an array of objects. QuickQL uses the
-top-level object keys as columns. CSV sources must include headers; comma,
-semicolon, and tab delimiters are detected from the first row.
-
-`MAP` keeps columns in the listed order. Use `MAP *`, or omit `MAP`,
-to return every column. Rename columns with `output=input`, or add quoted
-static string columns with `output="value"`. It can also add computed columns
-with `GETDATE`, which maps an ISO timestamp like `2026-05-26T18:23:07.004Z` to
-`2026-05-26`:
+### Filter rows
 
 ```ql
-SOURCE 'example.csv'
-MAP length=count, search, text="test... "
+SOURCE OPEN('users.json')
+FILTER active
 ```
 
 ```ql
-SOURCE 'example.json'
-MAP *, date = GETDATE(updatedAt)
+SOURCE OPEN('orders.json')
+FILTER AND(EQ(status, 'pending'), total)
 ```
 
-`FILTER` currently supports equality filters. Use `OR` to match any of several
-filters on the same line:
+### Flatten nested arrays
 
 ```ql
-SOURCE 'example.json'
-FILTER index = global_doku_de OR index = public_docs
-FILTER published = true
-MAP count, day, search
+SOURCE OPEN('invoices.json')  -- each invoice has a "lines" array
+MAP_MANY lines
+MAP product_id, quantity, price
 ```
 
-Quoted string values work too:
+### Group and aggregate
 
 ```ql
-SOURCE 'example.csv'
-FILTER Channel = 'Public Knowledge Base'
-MAP Number_of_Searches, Search_Term
+SOURCE OPEN('sales.json')
+GROUP_BY region MAP revenue = SUM(amount), orders = COUNT(amount)
 ```
 
-`GROUP_BY` deduplicates rows by one or more key columns. It can also compute
-aggregations with `SUM`, `ARRAY`, `COUNT`, `MINDATE`, and `MAXDATE`. Date
-aggregations parse strings formatted as `23.01.2026`, `23-01-2026`, or
-`2026-01-23`:
+### Sort
 
 ```ql
-SOURCE 'example.csv'
-FILTER Channel = 'Public Knowledge Base'
-GROUP_BY Search_Term MAP Number_of_Searches = SUM(Number_of_Searches), Search_Dates = ARRAY(Search_Date), Count = COUNT(Search_Term), First_Date = MINDATE(Search_Date), Last_Date = MAXDATE(Search_Date)
-SORT_BY Number_of_Searches DESC
+SOURCE OPEN('products.json')
+SORT_BY price DESC, name ASC
 ```
 
-Use `GROUP_BY *` to aggregate every input row into a single group:
+## Functions
 
-```ql
-SOURCE 'example.json'
-GROUP_BY * MAP ids = ARRAY(id)
-```
+| Function | Description |
+|----------|-------------|
+| `SUM(field)` | Sum of numeric values (works on grouped arrays) |
+| `COUNT(field)` | Count of values |
+| `ARRAY(a, b, ...)` | Collect values into an array |
+| `CONCAT(a, b, ...)` | Concatenate strings |
+| `EQ(a, b)` | `true` if `a` equals `b` |
+| `AND(a, b, ...)` | `true` if all arguments are truthy |
+| `OR(a, b, ...)` | `true` if any argument is truthy |
+| `GETDATE(field)` | Extract the date part from an ISO datetime string |
+| `MINDATE(field)` | Earliest date in a set |
+| `MAXDATE(field)` | Latest date in a set |
+| `BASE64(value)` | Base64-encode a value |
+| `OPEN(src)` / `GET(src)` | Load a file or URL (HTTP GET) |
+| `POST(src)` | HTTP POST |
+| `PUT(src)` | HTTP PUT |
 
-For JSON object columns, use dot paths to group or aggregate nested values:
+See [docs/functions.md](docs/functions.md) for full details and examples.
 
-```ql
-SOURCE 'example.json'
-GROUP_BY metadata.source MAP count = COUNT(id)
-```
+## Values and Expressions
 
-`SORT_BY` accepts one or more columns. Direction is optional and defaults to
-ascending:
+- **Field reference**: `name`, `address.city` (dot-notation for nested fields)
+- **String**: `'hello'` or `"hello"`
+- **Number**: `42`, `-3.14`
+- **Boolean**: `true`, `false`
+- **Inline object**: `{key: value, other: 'text'}`
+- **Inline array**: `[1, 2, 3]`
+- **Function call**: `SUM(amount)`
 
-```ql
-SOURCE 'example.json'
-SORT_BY count DESC, search ASC
-```
+See [docs/values-and-expressions.md](docs/values-and-expressions.md) for full details.
 
-`MAP_MANY` expands an array column into one row per array item. This is useful
-for paged HTTP responses like `{ "items": [...], "totalCount": 10299 }`:
+## Detailed Documentation
 
-```ql
-SOURCE 'https://api.example.test/users' HEADERS Authorization = 'Bearer token'
-MAP *
-MAP_MANY items
-```
-
-Supported query lines are `SOURCE`, `FILTER`, `MAP`, `MAP_MANY`, `GROUP_BY`,
-and `SORT_BY`. Lines run in the order they appear, so filter, map, or group
-before a `MAP` that removes columns needed by later steps. Multiple `FILTER`
-lines are applied as separate pipeline steps. `LIMIT` and `AND` are not
-currently implemented.
-
-## Usage
-
-Open a `.ql` file and press the play button in the editor title or the CodeLens above the query.
-
-Results open in the bottom QuickQL panel. The Rust engine streams result rows to the extension process over stdout, and the extension keeps paged rows in memory for the virtualized table. No result file is written for normal VS Code query execution.
-
-## Completions
-
-The language server suggests QuickQL keywords and reads the JSON or CSV file
-referenced by `SOURCE` to suggest source field names.
+- [SOURCE](docs/source.md) — loading data
+- [MAP](docs/map.md) — transforming and selecting columns
+- [FILTER](docs/filter.md) — filtering rows
+- [MAP_MANY](docs/map_many.md) — flattening nested arrays
+- [GROUP_BY](docs/group_by.md) — grouping and aggregation
+- [SORT_BY](docs/sort_by.md) — sorting results
+- [Functions](docs/functions.md) — built-in functions reference
+- [Values & Expressions](docs/values-and-expressions.md) — literals, references, operators

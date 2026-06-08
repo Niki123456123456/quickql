@@ -1,0 +1,195 @@
+# Functions
+
+Built-in functions are available in any expression position — inside `MAP`, `FILTER`, `SOURCE`, and the `MAP` clause of `GROUP_BY`. Function names are case-insensitive.
+
+---
+
+## Aggregate functions
+
+These functions are primarily useful inside `GROUP_BY MAP` where a field holds an array of values collected from a group. They also accept plain scalar or array values directly.
+
+### SUM
+
+Sums numeric values. Non-numeric strings are parsed as numbers; values that cannot be parsed contribute `0`. Returns an integer when the result has no fractional part.
+
+```ql
+SOURCE OPEN('sales.json')
+GROUP_BY region MAP total = SUM(amount)
+```
+
+```ql
+-- sum two fields per row
+SOURCE OPEN('orders.json')
+MAP *, total = SUM(price, shipping_fee)
+```
+
+---
+
+### COUNT
+
+Counts the number of values. When given a grouped array the result is the number of rows in the group.
+
+```ql
+SOURCE OPEN('orders.json')
+GROUP_BY status MAP n = COUNT(id)
+```
+
+---
+
+### ARRAY
+
+Collects arguments into a flat array. Existing arrays in the arguments are flattened.
+
+```ql
+SOURCE OPEN('orders.json')
+GROUP_BY customer_id MAP order_ids = ARRAY(id)
+```
+
+---
+
+### MINDATE / MAXDATE
+
+Returns the earliest or latest date string from a set. Understands ISO date formats: `YYYY-MM-DD`, `DD-MM-YYYY`, `DD.MM.YYYY`, and ISO datetimes (`YYYY-MM-DDTHH:MM:SS...`). Returns `null` if no parseable date is found.
+
+```ql
+SOURCE OPEN('events.json')
+GROUP_BY user_id MAP first_seen = MINDATE(created_at), last_seen = MAXDATE(created_at)
+```
+
+---
+
+## String functions
+
+### CONCAT
+
+Concatenates all arguments into a single string. Arrays in arguments are flattened. Non-string values are converted to their JSON representation; `null` becomes an empty string.
+
+```ql
+SOURCE OPEN('users.json')
+MAP *, full_name = CONCAT(first_name, ' ', last_name)
+```
+
+---
+
+### BASE64
+
+Base64-encodes the string representation of its argument.
+
+```ql
+SOURCE OPEN('api_keys.json')
+MAP id, encoded = BASE64(secret)
+```
+
+---
+
+### GETDATE
+
+Extracts the date portion (`YYYY-MM-DD`) from an ISO datetime string. Returns `null` if the input is not a datetime string.
+
+```ql
+SOURCE OPEN('events.json')
+MAP *, date = GETDATE(created_at)
+```
+
+Input: `"2024-03-15T08:30:00Z"` → Output: `"2024-03-15"`
+
+---
+
+## Logic functions
+
+### EQ
+
+Returns `true` if both arguments are equal (strict equality).
+
+```ql
+SOURCE OPEN('orders.json')
+FILTER EQ(status, 'shipped')
+```
+
+---
+
+### AND
+
+Returns `true` if all arguments are truthy.
+
+```ql
+SOURCE OPEN('orders.json')
+FILTER AND(EQ(status, 'pending'), total)
+```
+
+---
+
+### OR
+
+Returns `true` if at least one argument is truthy.
+
+```ql
+SOURCE OPEN('orders.json')
+FILTER OR(EQ(status, 'pending'), EQ(status, 'processing'))
+```
+
+---
+
+### LEN
+
+Returns the number of arguments (not the length of a string or array). Primarily useful for counting fixed-length argument lists.
+
+```ql
+SOURCE OPEN('data.json')
+MAP n = LEN(a, b, c)   -- always 3
+```
+
+---
+
+## Data-loading functions
+
+These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.
+
+### GET / OPEN
+
+Perform an HTTP GET request (or open a local file) and return the parsed JSON.
+
+```ql
+SOURCE GET('https://api.example.com/users')
+```
+
+With headers and paging:
+
+```ql
+SOURCE GET({
+  src: 'https://api.example.com/items',
+  headers: {Authorization: 'Bearer token'},
+  paging: {
+    type: 'cursor',
+    in:   {location: 'query', path: 'cursor'},
+    from: {location: 'body',  path: 'meta.next_cursor'}
+  }
+})
+```
+
+---
+
+### POST
+
+Perform an HTTP POST and return the parsed JSON response.
+
+```ql
+SOURCE POST({
+  src: 'https://api.example.com/search',
+  headers: {Content-Type: 'application/json'},
+  body: {filter: 'active', page: 1}
+})
+```
+
+---
+
+### PUT
+
+Perform an HTTP PUT and return the parsed JSON response.
+
+```ql
+SOURCE PUT({
+  src: 'https://api.example.com/items/1',
+  body: {status: 'archived'}
+})
+```
