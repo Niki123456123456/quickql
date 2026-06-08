@@ -1,4 +1,7 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 export interface QueryResult {
   columns: string[];
@@ -27,7 +30,12 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         const rows = await this.readRows(message.start, message.count);
         await this.view?.webview.postMessage({ type: 'page', start: message.start, rows });
       } else if (message?.type === 'openJson' && this.result) {
-        await this.openJsonResult(this.result);
+        try {
+          await this.openJsonResult(this.result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(`Unable to open QuickQL results as JSON: ${message}`);
+        }
       }
     }, undefined, this.context.subscriptions);
     this.render();
@@ -58,25 +66,45 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     return rows;
   }
 
-  private readAllRows(result: QueryResult): Record<string, unknown>[] {
-    const rows: Record<string, unknown>[] = [];
-    for (let rowIndex = 0; rowIndex < result.rowCount; rowIndex += 1) {
-      const pageStart = Math.floor(rowIndex / result.pageSize) * result.pageSize;
-      const page = result.pages.get(pageStart);
-      rows.push(page?.[rowIndex - pageStart] ?? {});
-    }
-    return rows;
-  }
-
   private async openJsonResult(result: QueryResult): Promise<void> {
-    const rows = this.readAllRows(result);
-    const document = await vscode.workspace.openTextDocument({
-      content: JSON.stringify(rows, null, 2),
-      language: 'json'
-    });
-    await vscode.window.showTextDocument(document, {
+    const uri = await this.writeJsonResult(result);
+    await vscode.commands.executeCommand('vscode.open', uri, {
       preview: false
     });
+  }
+
+  private async writeJsonResult(result: QueryResult): Promise<vscode.Uri> {
+    const outputDir = path.join(os.tmpdir(), 'quickql-results');
+    await fs.promises.mkdir(outputDir, { recursive: true });
+    const fileName = `${this.resultFileBaseName(result.source)}-${Date.now()}.json`;
+    const filePath = path.join(outputDir, fileName);
+    const stream = fs.createWriteStream(filePath, { encoding: 'utf8' });
+
+    try {
+      await writeToStream(stream, '[\n');
+      let isFirstRow = true;
+      for (let rowIndex = 0; rowIndex < result.rowCount; rowIndex += 1) {
+        const pageStart = Math.floor(rowIndex / result.pageSize) * result.pageSize;
+        const page = result.pages.get(pageStart);
+        const row = page?.[rowIndex - pageStart] ?? {};
+        const prefix = isFirstRow ? '  ' : ',\n  ';
+        await writeToStream(stream, prefix + JSON.stringify(row));
+        isFirstRow = false;
+      }
+      await writeToStream(stream, '\n]\n');
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
+
+    await closeStream(stream);
+    return vscode.Uri.file(filePath);
+  }
+
+  private resultFileBaseName(source: string): string {
+    const parsed = path.parse(source);
+    const baseName = parsed.name || parsed.base || 'quickql-results';
+    return baseName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'quickql-results';
   }
 
   private render(): void {
@@ -320,6 +348,44 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch));
+}
+
+function writeToStream(stream: fs.WriteStream, chunk: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('drain', onDrain);
+      reject(error);
+    };
+    const onDrain = (): void => {
+      stream.off('error', onError);
+      resolve();
+    };
+
+    stream.once('error', onError);
+    if (stream.write(chunk)) {
+      stream.off('error', onError);
+      resolve();
+    } else {
+      stream.once('drain', onDrain);
+    }
+  });
+}
+
+function closeStream(stream: fs.WriteStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('finish', onFinish);
+      reject(error);
+    };
+    const onFinish = (): void => {
+      stream.off('error', onError);
+      resolve();
+    };
+
+    stream.once('error', onError);
+    stream.once('finish', onFinish);
+    stream.end();
+  });
 }
 
 function getNonce(): string {
