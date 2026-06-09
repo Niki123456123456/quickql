@@ -6,7 +6,7 @@ final_line = _{ hspace* ~ statement? ~ hspace* ~ comment? }
 statement  = { source_stmt | map_many_stmt | group_by_stmt | sort_by_stmt | filter_stmt | map_stmt }
 
 source_stmt   = { ^"SOURCE" ~ hspace+ ~ value_list }
-map_stmt      = { ^"MAP" ~ hspace+ ~ map_item_list }
+map_stmt      = { ^"MAP" ~ (hspace* ~ map_config)? ~ hspace+ ~ map_item_list }
 filter_stmt   = { ^"FILTER" ~ hspace+ ~ value_list }
 map_many_stmt = { ^"MAP_MANY" ~ hspace+ ~ identifier ~ (hspace+ ~ ^"INCLUDE" ~ hspace+ ~ include_column_list)? }
 group_by_stmt = { ^"GROUP_BY" ~ hspace+ ~ group_key_list ~ (hspace+ ~ ^"MAP" ~ hspace+ ~ map_item_list)? }
@@ -14,6 +14,7 @@ sort_by_stmt = { ^"SORT_BY" ~ hspace+ ~ sort_key_list }
 
 value_list  = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
 
+map_config = { "<" ~ hspace* ~ json_object ~ hspace* ~ ">" }
 map_item_list = { map_item ~ (hspace* ~ "," ~ hspace* ~ map_item)* }
 map_item      = { all_columns | assignment | value }
 

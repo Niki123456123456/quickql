@@ -2,8 +2,8 @@ use crate::csv::{csv_fields_from_source, load_csv_source};
 use crate::json::{load_json_http_source, load_json_source};
 use crate::parsing::{parse_query, parse_query_lenient};
 use crate::{
-    CaluculatedValue, KeyDescriptor, MapExpr, MapMany, Query, QueryResult, SortDirection, SortKey,
-    StreamMessage, SubQuery, ALL_COLUMNS,
+    CaluculatedValue, KeyDescriptor, MapExpr, MapMany, MapStep, Query, QueryResult, SortDirection,
+    SortKey, StreamMessage, SubQuery, ALL_COLUMNS,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
@@ -12,6 +12,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread;
 use std::time::Instant;
 
 pub fn stream_query_jsonl<W: Write>(
@@ -155,7 +157,7 @@ fn execute_pipeline_with_stack(
     for step in &query.steps {
         result = match step {
             SubQuery::Source(sources) => load_sources(query_path, sources, ql_stack)?,
-            SubQuery::Map(mapping) => apply_map(result, mapping, query_path, ql_stack),
+            SubQuery::Map(map) => apply_map(result, map, query_path, ql_stack),
             SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
             SubQuery::MapMany(map_many) => apply_map_many(result, map_many)?,
             SubQuery::GroupBy { keys, mapping } => {
@@ -170,40 +172,101 @@ fn execute_pipeline_with_stack(
 
 fn apply_map(
     result: QueryResult,
-    mapping: &[MapExpr],
+    map: &MapStep,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
 ) -> QueryResult {
+    let mapping = &map.mapping;
     if mapping.len() == 1 && matches!(mapping[0], MapExpr::All) {
         return result;
     }
 
-    let rows = result
-        .rows
-        .iter()
-        .map(|row| {
-            let mut output = Map::new();
-            for expr in mapping {
-                match expr {
-                    MapExpr::All => {
-                        if let Value::Object(map) = row {
-                            output.extend(map.clone());
-                        }
-                    }
-                    MapExpr::Specific { column, value } => {
-                        set_path(
-                            &mut output,
-                            column,
-                            value.caluculate(row, query_path, ql_stack),
-                        );
-                    }
-                }
-            }
-            Value::Object(output)
-        })
+    let Some(parallelism) = map_parallelism(&map.config, result.rows.len()) else {
+        let rows = result
+            .rows
+            .iter()
+            .map(|row| map_row(row, mapping, query_path, ql_stack))
+            .collect();
+
+        return QueryResult::new(rows);
+    };
+
+    apply_map_parallel(result, mapping, query_path, ql_stack, parallelism)
+}
+
+fn apply_map_parallel(
+    result: QueryResult,
+    mapping: &[MapExpr],
+    query_path: &Path,
+    ql_stack: &[PathBuf],
+    parallelism: usize,
+) -> QueryResult {
+    let row_count = result.rows.len();
+    let work = Mutex::new(result.rows.into_iter().enumerate().collect::<Vec<_>>());
+    let output = Mutex::new(vec![None; row_count]);
+
+    thread::scope(|scope| {
+        for _ in 0..parallelism {
+            scope.spawn(|| loop {
+                let next = work.lock().unwrap().pop();
+                let Some((index, row)) = next else {
+                    break;
+                };
+
+                let mut ql_stack = ql_stack.to_vec();
+                let mapped = map_row(&row, mapping, query_path, &mut ql_stack);
+                output.lock().unwrap()[index] = Some(mapped);
+            });
+        }
+    });
+
+    let rows = output
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.unwrap_or(Value::Null))
         .collect();
 
     QueryResult::new(rows)
+}
+
+fn map_parallelism(config: &Value, row_count: usize) -> Option<usize> {
+    if row_count <= 1 {
+        return None;
+    }
+
+    let parallel = config.get("parallel").and_then(Value::as_u64)? as usize;
+    if parallel <= 1 {
+        return None;
+    }
+
+    Some(parallel.min(row_count))
+}
+
+fn map_row(
+    row: &Value,
+    mapping: &[MapExpr],
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+) -> Value {
+    let mut output = Map::new();
+    for expr in mapping {
+        match expr {
+            MapExpr::All => {
+                if let Value::Object(map) = row {
+                    output.extend(map.clone());
+                }
+            }
+            MapExpr::Specific { column, value } => {
+                set_path(
+                    &mut output,
+                    column,
+                    value.caluculate(row, query_path, ql_stack),
+                );
+            }
+        }
+    }
+    Value::Object(output)
 }
 
 fn apply_filter(

@@ -3,6 +3,8 @@ use anyhow::{bail, Context, Result};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
+use serde_json::Value;
+use std::path::Path;
 
 #[derive(Parser)]
 #[grammar = "ql.pest"]
@@ -43,12 +45,33 @@ fn parse_source_stmt(pair: Pair<'_, Rule>) -> Result<Vec<CaluculatedValue>> {
     Ok(sources)
 }
 
-fn parse_map_stmt(pair: Pair<'_, Rule>) -> Result<Vec<MapExpr>> {
-    let list = pair
-        .into_inner()
+fn parse_map_stmt(pair: Pair<'_, Rule>) -> Result<MapStep> {
+    let children = pair.into_inner().collect::<Vec<_>>();
+    let config = children
+        .iter()
+        .find(|p| p.as_rule() == Rule::map_config)
+        .cloned()
+        .map(parse_map_config)
+        .transpose()?
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let list = children
+        .into_iter()
         .find(|p| p.as_rule() == Rule::map_item_list)
         .context("MAP requires items")?;
-    collect_map_items(list)
+    let mapping = collect_map_items(list)?;
+    Ok(MapStep { config, mapping })
+}
+
+fn parse_map_config(pair: Pair<'_, Rule>) -> Result<Value> {
+    let object = pair
+        .into_inner()
+        .find(|p| p.as_rule() == Rule::json_object)
+        .context("MAP config must be a JSON object")?;
+    let value = parse_json_object(object)?.caluculate(&Value::Null, Path::new(""), &mut Vec::new());
+    if !value.is_object() {
+        bail!("MAP config must be a JSON object");
+    }
+    Ok(value)
 }
 
 fn parse_filter_stmt(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
@@ -341,7 +364,10 @@ mod tests {
         assert_eq!(
             query,
             Query {
-                steps: vec![SubQuery::Map(vec![MapExpr::All])]
+                steps: vec![SubQuery::Map(MapStep {
+                    config: Value::Object(Default::default()),
+                    mapping: vec![MapExpr::All],
+                })]
             }
         );
     }
@@ -353,16 +379,49 @@ mod tests {
         assert_eq!(
             query,
             Query {
-                steps: vec![SubQuery::Map(vec![MapExpr::Specific {
-                    column: vec!["payload".to_string()],
-                    value: CaluculatedValue::Object(vec![(
-                        "token".to_string(),
-                        CaluculatedValue::FunctionCall {
-                            function: "BASE64".to_string(),
-                            parameters: vec![CaluculatedValue::Reference(vec!["name".to_string()])],
+                steps: vec![SubQuery::Map(MapStep {
+                    config: Value::Object(Default::default()),
+                    mapping: vec![MapExpr::Specific {
+                        column: vec!["payload".to_string()],
+                        value: CaluculatedValue::Object(vec![(
+                            "token".to_string(),
+                            CaluculatedValue::FunctionCall {
+                                function: "BASE64".to_string(),
+                                parameters: vec![CaluculatedValue::Reference(vec![
+                                    "name".to_string()
+                                ])],
+                            },
+                        )]),
+                    }],
+                })]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_map_with_config() {
+        let query = parse_query("MAP<{parallel: 20}> test = 'text', number = 32, id").unwrap();
+
+        assert_eq!(
+            query,
+            Query {
+                steps: vec![SubQuery::Map(MapStep {
+                    config: serde_json::json!({ "parallel": 20 }),
+                    mapping: vec![
+                        MapExpr::Specific {
+                            column: vec!["test".to_string()],
+                            value: CaluculatedValue::Static(Value::String("text".to_string())),
                         },
-                    )]),
-                }])]
+                        MapExpr::Specific {
+                            column: vec!["number".to_string()],
+                            value: CaluculatedValue::Static(serde_json::json!(32)),
+                        },
+                        MapExpr::Specific {
+                            column: vec!["id".to_string()],
+                            value: CaluculatedValue::Reference(vec!["id".to_string()]),
+                        },
+                    ],
+                })]
             }
         );
     }

@@ -36,7 +36,7 @@ pub struct SortKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubQuery {
     Source(Vec<CaluculatedValue>),
-    Map(Vec<MapExpr>),
+    Map(MapStep),
     Filter(CaluculatedValue),
     MapMany(MapMany),
     GroupBy {
@@ -49,6 +49,12 @@ pub enum SubQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {
     pub steps: Vec<SubQuery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapStep {
+    pub config: Value,
+    pub mapping: Vec<MapExpr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -606,6 +612,47 @@ mod tests {
                 { "n": 2, "day": "2026-05-31", "index": "global_doku_en" },
                 { "n": 1, "day": "2026-06-01", "index": "global_doku_en" },
                 { "n": 2, "day": "2026-06-01", "index": "global_doku_en" }
+            ])
+        );
+    }
+
+    #[test]
+    fn map_can_run_with_parallel_config() {
+        let query = Query {
+            steps: vec![
+                SubQuery::Source(vec![CaluculatedValue::Static(serde_json::json!([
+                    { "id": 1 },
+                    { "id": 2 },
+                    { "id": 3 }
+                ]))]),
+                SubQuery::Map(MapStep {
+                    config: serde_json::json!({ "parallel": 2 }),
+                    mapping: vec![
+                        MapExpr::Specific {
+                            column: vec!["test".to_string()],
+                            value: CaluculatedValue::Static(Value::String("text".to_string())),
+                        },
+                        MapExpr::Specific {
+                            column: vec!["number".to_string()],
+                            value: CaluculatedValue::Static(serde_json::json!(32)),
+                        },
+                        MapExpr::Specific {
+                            column: vec!["id".to_string()],
+                            value: CaluculatedValue::Reference(vec!["id".to_string()]),
+                        },
+                    ],
+                }),
+            ],
+        };
+
+        let result = crate::execution::execute_pipeline(&query, Path::new("")).unwrap();
+
+        assert_eq!(
+            Value::Array(result.rows),
+            serde_json::json!([
+                { "test": "text", "number": 32, "id": 1 },
+                { "test": "text", "number": 32, "id": 2 },
+                { "test": "text", "number": 32, "id": 3 }
             ])
         );
     }
