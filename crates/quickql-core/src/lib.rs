@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-use chrono::Local;
+use chrono::{Duration, Local, NaiveDate};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -137,6 +137,7 @@ impl CaluculatedValue {
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
                     "TODAY" => Value::String(Local::now().date_naive().to_string()),
+                    "ADDDATE" => add_date_value(values.first(), values.get(1)),
                     "GETDATE" => values
                         .first()
                         .and_then(|value| value.as_str())
@@ -325,6 +326,20 @@ fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
     Value::Array(values)
 }
 
+fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
+    let (Some(date), Some(days)) = (
+        date.and_then(Value::as_str)
+            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()),
+        days.and_then(value_to_i64),
+    ) else {
+        return Value::Null;
+    };
+
+    date.checked_add_signed(Duration::days(days))
+        .map(|date| Value::String(date.to_string()))
+        .unwrap_or(Value::Null)
+}
+
 fn value_to_i64(value: &Value) -> Option<i64> {
     value.as_i64()
 }
@@ -445,6 +460,10 @@ mod tests {
         CaluculatedValue::Static(serde_json::json!(value))
     }
 
+    fn string(value: &str) -> CaluculatedValue {
+        CaluculatedValue::Static(serde_json::json!(value))
+    }
+
     #[test]
     fn range_returns_inclusive_integer_values() {
         assert_eq!(
@@ -473,6 +492,30 @@ mod tests {
         };
 
         assert!(chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_ok());
+    }
+
+    #[test]
+    fn adddate_adds_signed_days_to_iso_date_string() {
+        assert_eq!(
+            calculate_function("ADDDATE", vec![string("2026-05-26"), number(-1)]),
+            serde_json::json!("2026-05-25")
+        );
+        assert_eq!(
+            calculate_function("adddate", vec![string("2026-05-26"), number(2)]),
+            serde_json::json!("2026-05-28")
+        );
+    }
+
+    #[test]
+    fn adddate_returns_null_for_invalid_input() {
+        assert_eq!(
+            calculate_function("ADDDATE", vec![string("2026-02-30"), number(1)]),
+            Value::Null
+        );
+        assert_eq!(
+            calculate_function("ADDDATE", vec![string("2026-05-26")]),
+            Value::Null
+        );
     }
 }
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
