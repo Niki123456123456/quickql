@@ -66,17 +66,28 @@ fn parse_filter_stmt(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
     }
 }
 
-fn parse_map_many_stmt(pair: Pair<'_, Rule>) -> Result<String> {
-    let field = pair
-        .into_inner()
-        .find(|p| p.as_rule() == Rule::identifier)
+fn parse_map_many_stmt(pair: Pair<'_, Rule>) -> Result<MapMany> {
+    let mut children = pair.into_inner();
+    let field = children
+        .next()
         .context("MAP_MANY requires a column name")?
         .as_str()
         .to_string();
     if field.is_empty() {
         bail!("MAP_MANY requires a column name");
     }
-    Ok(field)
+
+    let include = children
+        .find(|p| p.as_rule() == Rule::include_column_list)
+        .map(|list| {
+            list.into_inner()
+                .filter(|p| p.as_rule() == Rule::identifier)
+                .map(|p| p.as_str().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(MapMany { field, include })
 }
 
 fn parse_group_by_stmt(pair: Pair<'_, Rule>) -> Result<SubQuery> {
@@ -352,6 +363,21 @@ mod tests {
                         },
                     )]),
                 }])]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_map_many_with_include_columns() {
+        let query = parse_query("MAP_MANY numbers INCLUDE day, index").unwrap();
+
+        assert_eq!(
+            query,
+            Query {
+                steps: vec![SubQuery::MapMany(MapMany {
+                    field: "numbers".to_string(),
+                    include: vec!["day".to_string(), "index".to_string()],
+                })]
             }
         );
     }

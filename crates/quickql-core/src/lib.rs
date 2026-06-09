@@ -38,7 +38,7 @@ pub enum SubQuery {
     Source(Vec<CaluculatedValue>),
     Map(Vec<MapExpr>),
     Filter(CaluculatedValue),
-    MapMany(String),
+    MapMany(MapMany),
     GroupBy {
         keys: Vec<String>,
         mapping: Vec<MapExpr>,
@@ -49,6 +49,12 @@ pub enum SubQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {
     pub steps: Vec<SubQuery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapMany {
+    pub field: String,
+    pub include: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -565,6 +571,42 @@ mod tests {
         assert_eq!(
             calculate_function("ADDDATE", vec![string("2026-05-26")]),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn map_many_can_include_parent_columns() {
+        let query = Query {
+            steps: vec![
+                SubQuery::Source(vec![CaluculatedValue::Static(serde_json::json!([
+                    {
+                        "day": "2026-05-31",
+                        "index": "global_doku_en",
+                        "numbers": [{ "n": 1 }, { "n": 2 }]
+                    },
+                    {
+                        "day": "2026-06-01",
+                        "index": "global_doku_en",
+                        "numbers": [{ "n": 1 }, { "n": 2 }]
+                    }
+                ]))]),
+                SubQuery::MapMany(MapMany {
+                    field: "numbers".to_string(),
+                    include: vec!["day".to_string(), "index".to_string()],
+                }),
+            ],
+        };
+
+        let result = crate::execution::execute_pipeline(&query, Path::new("")).unwrap();
+
+        assert_eq!(
+            Value::Array(result.rows),
+            serde_json::json!([
+                { "n": 1, "day": "2026-05-31", "index": "global_doku_en" },
+                { "n": 2, "day": "2026-05-31", "index": "global_doku_en" },
+                { "n": 1, "day": "2026-06-01", "index": "global_doku_en" },
+                { "n": 2, "day": "2026-06-01", "index": "global_doku_en" }
+            ])
         );
     }
 

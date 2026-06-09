@@ -2,7 +2,7 @@ use crate::csv::{csv_fields_from_source, load_csv_source};
 use crate::json::{load_json_http_source, load_json_source};
 use crate::parsing::{parse_query, parse_query_lenient};
 use crate::{
-    CaluculatedValue, KeyDescriptor, MapExpr, Query, QueryResult, SortDirection, SortKey,
+    CaluculatedValue, KeyDescriptor, MapExpr, MapMany, Query, QueryResult, SortDirection, SortKey,
     StreamMessage, SubQuery, ALL_COLUMNS,
 };
 use anyhow::{bail, Context, Result};
@@ -157,7 +157,7 @@ fn execute_pipeline_with_stack(
             SubQuery::Source(sources) => load_sources(query_path, sources, ql_stack)?,
             SubQuery::Map(mapping) => apply_map(result, mapping, query_path, ql_stack),
             SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
-            SubQuery::MapMany(field) => apply_map_many(result, field)?,
+            SubQuery::MapMany(map_many) => apply_map_many(result, map_many)?,
             SubQuery::GroupBy { keys, mapping } => {
                 apply_group_by(result, keys, mapping, query_path, ql_stack)?
             }
@@ -220,15 +220,39 @@ fn apply_filter(
     QueryResult::new(rows)
 }
 
-fn apply_map_many(result: QueryResult, field: &str) -> Result<QueryResult> {
-    let path = path_parts(field);
+fn apply_map_many(result: QueryResult, map_many: &MapMany) -> Result<QueryResult> {
+    let path = path_parts(&map_many.field);
+    let include_paths = map_many
+        .include
+        .iter()
+        .map(|column| (column, path_parts(column)))
+        .collect::<Vec<_>>();
     let mut rows = Vec::new();
 
     for row in result.rows {
         match get_path(&row, &path) {
-            Value::Array(values) => rows.extend(values),
+            Value::Array(values) if include_paths.is_empty() => rows.extend(values),
+            Value::Array(values) => {
+                for value in values {
+                    let Value::Object(mut output) = value else {
+                        bail!(
+                            "MAP_MANY column '{}' must contain objects when INCLUDE is used, got {value}",
+                            map_many.field
+                        );
+                    };
+
+                    for (_, include_path) in &include_paths {
+                        set_path(&mut output, include_path, get_path(&row, include_path));
+                    }
+
+                    rows.push(Value::Object(output));
+                }
+            }
             Value::Null => {}
-            value => bail!("MAP_MANY column '{field}' must be an array, got {value}"),
+            value => bail!(
+                "MAP_MANY column '{}' must be an array, got {value}",
+                map_many.field
+            ),
         }
     }
 
