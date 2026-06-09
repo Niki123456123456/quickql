@@ -133,6 +133,7 @@ impl CaluculatedValue {
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => serde_json::json!(values.len()),
                     "RANGE" => range_value(values.first(), values.get(1)),
+                    "CROSSJOIN" => cross_join_value(values.first()),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
@@ -340,6 +341,51 @@ fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn cross_join_value(input: Option<&Value>) -> Value {
+    let Some(input) = input.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+
+    let arrays: Option<Vec<_>> = input
+        .iter()
+        .map(|(key, value)| value.as_array().map(|values| (key.as_str(), values)))
+        .collect();
+    let Some(arrays) = arrays else {
+        return Value::Null;
+    };
+
+    if arrays.is_empty() {
+        return Value::Array(Vec::new());
+    }
+
+    let mut rows = Vec::new();
+    cross_join_rows(
+        &arrays,
+        arrays.len() - 1,
+        &mut serde_json::Map::new(),
+        &mut rows,
+    );
+    Value::Array(rows)
+}
+
+fn cross_join_rows(
+    arrays: &[(&str, &Vec<Value>)],
+    index: usize,
+    current: &mut serde_json::Map<String, Value>,
+    rows: &mut Vec<Value>,
+) {
+    let (key, values) = arrays[index];
+    for value in values {
+        current.insert(key.to_string(), value.clone());
+        if index == 0 {
+            rows.push(Value::Object(current.clone()));
+        } else {
+            cross_join_rows(arrays, index - 1, current, rows);
+        }
+    }
+    current.remove(key);
+}
+
 fn value_to_i64(value: &Value) -> Option<i64> {
     value.as_i64()
 }
@@ -464,6 +510,10 @@ mod tests {
         CaluculatedValue::Static(serde_json::json!(value))
     }
 
+    fn array(value: Value) -> CaluculatedValue {
+        CaluculatedValue::Static(value)
+    }
+
     #[test]
     fn range_returns_inclusive_integer_values() {
         assert_eq!(
@@ -514,6 +564,45 @@ mod tests {
         );
         assert_eq!(
             calculate_function("ADDDATE", vec![string("2026-05-26")]),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn crossjoin_returns_cartesian_product_with_object_keys() {
+        assert_eq!(
+            calculate_function(
+                "CROSSJOIN",
+                vec![array(serde_json::json!({
+                    "a": [1, 2, 3],
+                    "b": ["a", "b"]
+                }))]
+            ),
+            serde_json::json!([
+                { "a": 1, "b": "a" },
+                { "a": 2, "b": "a" },
+                { "a": 3, "b": "a" },
+                { "a": 1, "b": "b" },
+                { "a": 2, "b": "b" },
+                { "a": 3, "b": "b" }
+            ])
+        );
+    }
+
+    #[test]
+    fn crossjoin_returns_null_for_non_object_or_non_array_values() {
+        assert_eq!(
+            calculate_function("CROSSJOIN", vec![number(1)]),
+            Value::Null
+        );
+        assert_eq!(
+            calculate_function(
+                "CROSSJOIN",
+                vec![array(serde_json::json!({
+                    "a": [1],
+                    "b": "not an array"
+                }))]
+            ),
             Value::Null
         );
     }

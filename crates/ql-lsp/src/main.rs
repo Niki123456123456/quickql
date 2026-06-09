@@ -85,8 +85,24 @@ impl LanguageServer for Backend {
 
 fn keyword_items() -> Vec<CompletionItem> {
     [
-        "SOURCE", "MAP", "FILTER", "OR", "GROUP_BY", "SUM", "ARRAY", "MINDATE", "MAXDATE", "COUNT",
-        "GETDATE", "TODAY", "ADDDATE", "CONCAT", "BASE64", "MAP_MANY", "SORT_BY",
+        "SOURCE",
+        "MAP",
+        "FILTER",
+        "OR",
+        "GROUP_BY",
+        "SUM",
+        "ARRAY",
+        "MINDATE",
+        "MAXDATE",
+        "COUNT",
+        "GETDATE",
+        "TODAY",
+        "ADDDATE",
+        "CROSSJOIN",
+        "CONCAT",
+        "BASE64",
+        "MAP_MANY",
+        "SORT_BY",
     ]
     .into_iter()
     .map(|label| CompletionItem {
