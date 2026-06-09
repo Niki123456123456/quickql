@@ -158,7 +158,9 @@ fn execute_pipeline_with_stack(
             SubQuery::Map(mapping) => apply_map(result, mapping, query_path, ql_stack),
             SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
             SubQuery::MapMany(field) => apply_map_many(result, field)?,
-            SubQuery::GroupBy { keys, mapping } => apply_group_by(result, keys, mapping, query_path, ql_stack)?,
+            SubQuery::GroupBy { keys, mapping } => {
+                apply_group_by(result, keys, mapping, query_path, ql_stack)?
+            }
             SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
         };
     }
@@ -241,7 +243,7 @@ fn load_sources(
     let mut rows = Vec::new();
     for source in sources {
         let source = source.caluculate(&Value::Null, query_path, ql_stack);
-        if let Value::Array(array) = source  {
+        if let Value::Array(array) = source {
             rows.extend(array);
         } else {
             rows.push(source);
@@ -302,7 +304,8 @@ fn fields_from_ql_source(path: &Path) -> Result<Vec<String>> {
 fn apply_group_by(
     result: QueryResult,
     keys: &[String],
-    mapping: &[MapExpr], query_path: &Path,
+    mapping: &[MapExpr],
+    query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
 ) -> Result<QueryResult> {
     let group_all = keys.len() == 1 && keys[0] == ALL_COLUMNS;
@@ -352,7 +355,11 @@ fn apply_group_by(
             match expr {
                 MapExpr::All => {}
                 MapExpr::Specific { column, value } => {
-                    set_path(&mut output, column, value.caluculate(&group_value, query_path, ql_stack));
+                    set_path(
+                        &mut output,
+                        column,
+                        value.caluculate(&group_value, query_path, ql_stack),
+                    );
                 }
             }
         }

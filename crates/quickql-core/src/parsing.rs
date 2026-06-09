@@ -9,8 +9,8 @@ use pest_derive::Parser;
 struct QlParser;
 
 pub fn parse_query(input: &str) -> Result<Query> {
-    let parsed = QlParser::parse(Rule::query, input)
-        .with_context(|| "Parsing QuickQL query".to_string())?;
+    let parsed =
+        QlParser::parse(Rule::query, input).with_context(|| "Parsing QuickQL query".to_string())?;
     let steps = parsed
         .flatten()
         .filter(|pair| pair.as_rule() == Rule::statement)
@@ -20,11 +20,14 @@ pub fn parse_query(input: &str) -> Result<Query> {
 }
 
 fn parse_statement(pair: Pair<'_, Rule>) -> Result<SubQuery> {
-    let statement = pair.into_inner().next().context("Missing query statement")?;
+    let statement = pair
+        .into_inner()
+        .next()
+        .context("Missing query statement")?;
     match statement.as_rule() {
-        Rule::source_stmt   => Ok(SubQuery::Source(parse_source_stmt(statement)?)),
-        Rule::map_stmt      => Ok(SubQuery::Map(parse_map_stmt(statement)?)),
-        Rule::filter_stmt   => Ok(SubQuery::Filter(parse_filter_stmt(statement)?)),
+        Rule::source_stmt => Ok(SubQuery::Source(parse_source_stmt(statement)?)),
+        Rule::map_stmt => Ok(SubQuery::Map(parse_map_stmt(statement)?)),
+        Rule::filter_stmt => Ok(SubQuery::Filter(parse_filter_stmt(statement)?)),
         Rule::map_many_stmt => Ok(SubQuery::MapMany(parse_map_many_stmt(statement)?)),
         Rule::group_by_stmt => parse_group_by_stmt(statement),
         Rule::sort_by_stmt => parse_sort_by_stmt(statement),
@@ -192,9 +195,9 @@ fn parse_value(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
         Rule::function_call => parse_function_call(inner),
         Rule::json_object => parse_json_object(inner),
         Rule::json_array => parse_json_array(inner),
-        Rule::single_quoted_string | Rule::double_quoted_string => {
-            Ok(CaluculatedValue::Static(Value::String(pair_text(inner).to_string())))
-        }
+        Rule::single_quoted_string | Rule::double_quoted_string => Ok(CaluculatedValue::Static(
+            Value::String(pair_text(inner).to_string()),
+        )),
         Rule::bool_literal => {
             let b = inner.as_str().to_ascii_lowercase() == "true";
             Ok(CaluculatedValue::Static(Value::Bool(b)))
@@ -241,9 +244,7 @@ fn parse_json_key(pair: Pair<'_, Rule>) -> Result<String> {
     let inner = pair.into_inner().next().context("JSON key is empty")?;
     match inner.as_rule() {
         Rule::ident => Ok(inner.as_str().to_string()),
-        Rule::single_quoted_string | Rule::double_quoted_string => {
-            Ok(pair_text(inner).to_string())
-        }
+        Rule::single_quoted_string | Rule::double_quoted_string => Ok(pair_text(inner).to_string()),
         rule => bail!("Invalid JSON key type: {rule:?}"),
     }
 }

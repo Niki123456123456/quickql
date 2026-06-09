@@ -141,6 +141,18 @@ MAP n = LEN(a, b, c)   -- always 3
 
 ---
 
+### RANGE
+
+Returns an inclusive array of integers from the first argument to the second argument.
+
+```ql
+MAP values = RANGE(0, 2)      -- [0, 1, 2]
+MAP values = RANGE(-3, -1)    -- [-3, -2, -1]
+MAP values = RANGE(2, 0)      -- [2, 1, 0]
+```
+
+---
+
 ## Data-loading functions
 
 These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.

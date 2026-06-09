@@ -131,6 +131,7 @@ impl CaluculatedValue {
                     }
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => serde_json::json!(values.len()),
+                    "RANGE" => range_value(values.first(), values.get(1)),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
@@ -157,18 +158,30 @@ impl CaluculatedValue {
                             .collect::<Vec<_>>(),
                         DateAggregate::Max,
                     ),
-                    "OPEN" => {
-                        Self::open_source(values.first(), query_path, reqwest::Method::GET, ql_stack)
-                    }
-                    "GET" => {
-                        Self::open_source(values.first(), query_path, reqwest::Method::GET, ql_stack)
-                    }
-                    "POST" => {
-                        Self::open_source(values.first(), query_path, reqwest::Method::POST, ql_stack)
-                    }
-                    "PUT" => {
-                        Self::open_source(values.first(), query_path, reqwest::Method::PUT, ql_stack)
-                    }
+                    "OPEN" => Self::open_source(
+                        values.first(),
+                        query_path,
+                        reqwest::Method::GET,
+                        ql_stack,
+                    ),
+                    "GET" => Self::open_source(
+                        values.first(),
+                        query_path,
+                        reqwest::Method::GET,
+                        ql_stack,
+                    ),
+                    "POST" => Self::open_source(
+                        values.first(),
+                        query_path,
+                        reqwest::Method::POST,
+                        ql_stack,
+                    ),
+                    "PUT" => Self::open_source(
+                        values.first(),
+                        query_path,
+                        reqwest::Method::PUT,
+                        ql_stack,
+                    ),
                     "CONCAT" => Value::String(
                         values
                             .iter()
@@ -289,6 +302,31 @@ fn value_truthy(value: &Value) -> bool {
     }
 }
 
+fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
+    let (Some(start), Some(end)) = (start.and_then(value_to_i64), end.and_then(value_to_i64))
+    else {
+        return Value::Null;
+    };
+
+    let step = if start <= end { 1 } else { -1 };
+    let mut current = start;
+    let mut values = Vec::new();
+
+    loop {
+        values.push(serde_json::json!(current));
+        if current == end {
+            break;
+        }
+        current += step;
+    }
+
+    Value::Array(values)
+}
+
+fn value_to_i64(value: &Value) -> Option<i64> {
+    value.as_i64()
+}
+
 pub struct QueryResult {
     pub columns: KeyDescriptor,
     pub rows: Vec<Value>,
@@ -388,6 +426,43 @@ pub enum StreamMessage<'a> {
 }
 
 pub const DEFAULT_BLOCK_SIZE: usize = 1000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn calculate_function(function: &str, parameters: Vec<CaluculatedValue>) -> Value {
+        CaluculatedValue::FunctionCall {
+            function: function.to_string(),
+            parameters,
+        }
+        .caluculate(&Value::Null, Path::new(""), &mut Vec::new())
+    }
+
+    fn number(value: i64) -> CaluculatedValue {
+        CaluculatedValue::Static(serde_json::json!(value))
+    }
+
+    #[test]
+    fn range_returns_inclusive_integer_values() {
+        assert_eq!(
+            calculate_function("RANGE", vec![number(0), number(2)]),
+            serde_json::json!([0, 1, 2])
+        );
+        assert_eq!(
+            calculate_function("range", vec![number(-3), number(-1)]),
+            serde_json::json!([-3, -2, -1])
+        );
+    }
+
+    #[test]
+    fn range_can_count_down() {
+        assert_eq!(
+            calculate_function("RANGE", vec![number(2), number(0)]),
+            serde_json::json!([2, 1, 0])
+        );
+    }
+}
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
 
 pub(crate) const ALL_COLUMNS: &str = "*";

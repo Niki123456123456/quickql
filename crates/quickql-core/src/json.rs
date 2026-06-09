@@ -42,15 +42,7 @@ pub(crate) fn load_json_http_source(
         })
         .collect::<Result<Vec<_>>>()?;
     match paging.map(parse_paging_config).transpose()? {
-        None => send_json_request(
-            &client,
-            method,
-            uri,
-            &headers,
-            body,
-            None,
-            &method_label,
-        ),
+        None => send_json_request(&client, method, uri, &headers, body, None, &method_label),
         Some(PagingConfig::Cursor { cursor_in, from }) => {
             let mut result = send_json_request(
                 &client,
@@ -279,10 +271,11 @@ fn parse_paging_location(value: &Value) -> Result<PagingCursorLocation> {
 }
 
 fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    path.split('.').try_fold(value, |current, part| match current {
-        Value::Object(map) => map.get(part),
-        _ => None,
-    })
+    path.split('.')
+        .try_fold(value, |current, part| match current {
+            Value::Object(map) => map.get(part),
+            _ => None,
+        })
 }
 
 fn entry_count_at_path(value: &Value, path: &str) -> usize {
