@@ -4,6 +4,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use chrono::Local;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -135,6 +136,7 @@ impl CaluculatedValue {
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
+                    "TODAY" => Value::String(Local::now().date_naive().to_string()),
                     "GETDATE" => values
                         .first()
                         .and_then(|value| value.as_str())
@@ -461,6 +463,16 @@ mod tests {
             calculate_function("RANGE", vec![number(2), number(0)]),
             serde_json::json!([2, 1, 0])
         );
+    }
+
+    #[test]
+    fn today_returns_iso_date_string() {
+        let value = calculate_function("TODAY", vec![]);
+        let Value::String(date) = value else {
+            panic!("TODAY should return a string");
+        };
+
+        assert!(chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_ok());
     }
 }
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
