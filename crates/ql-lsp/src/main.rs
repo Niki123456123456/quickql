@@ -101,6 +101,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "CROSSJOIN",
         "CONCAT",
         "BASE64",
+        "UMAP",
         "MAP_MANY",
         "SORT_BY",
     ]

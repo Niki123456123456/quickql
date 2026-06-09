@@ -12,6 +12,7 @@ mod csv;
 mod execution;
 mod json;
 mod parsing;
+mod umap;
 
 pub use execution::{
     fields_from_source_sample, json_fields_for_query, json_fields_from_source_sample,
@@ -210,6 +211,7 @@ impl CaluculatedValue {
                         .map(value_to_string)
                         .map(|value| Value::String(BASE64_STANDARD.encode(value)))
                         .unwrap_or(Value::Null),
+                    "UMAP" => umap::umap_value(values.first(), values.get(1)),
                     _ => Value::Null,
                 }
             }
@@ -692,6 +694,51 @@ mod tests {
                     "b": "not an array"
                 }))]
             ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn umap_returns_sample_coordinate_rows() {
+        let value = calculate_function(
+            "UMAP",
+            vec![
+                array(serde_json::json!([
+                    [0.0, 0.1, 0.2],
+                    [0.2, 0.1, 0.0],
+                    [1.0, 1.1, 1.2],
+                    [1.2, 1.1, 1.0],
+                    [2.0, 2.1, 2.2]
+                ])),
+                array(serde_json::json!({
+                    "annType": "exhaustive",
+                    "initialisation": "random",
+                    "k": 2,
+                    "nDim": 2,
+                    "nEpochs": 5,
+                    "seed": 7
+                })),
+            ],
+        );
+
+        let Value::Array(rows) = value else {
+            panic!("UMAP should return an array");
+        };
+
+        assert_eq!(rows.len(), 5);
+        for row in rows {
+            let Value::Array(columns) = row else {
+                panic!("UMAP rows should be arrays");
+            };
+            assert_eq!(columns.len(), 2);
+            assert!(columns.iter().all(|value| value.as_f64().is_some()));
+        }
+    }
+
+    #[test]
+    fn umap_returns_null_for_invalid_matrix() {
+        assert_eq!(
+            calculate_function("UMAP", vec![array(serde_json::json!([[1.0, 2.0], [3.0]]))]),
             Value::Null
         );
     }
