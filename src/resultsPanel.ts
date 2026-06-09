@@ -139,6 +139,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const columns = JSON.stringify(result.columns);
     const rowCount = JSON.stringify(result.rowCount);
     const pageSize = result.pageSize;
+    const renderedColumnCount = Math.max(result.columns.length, 1);
     const elapsed = Number.isFinite(result.elapsedMs) ? result.elapsedMs.toFixed(1) : '0.0';
 
     return `<!DOCTYPE html>
@@ -212,7 +213,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     }
     .header, .row {
       display: grid;
-      grid-template-columns: repeat(${result.columns.length}, minmax(140px, 1fr));
+      grid-template-columns: repeat(${renderedColumnCount}, minmax(140px, 1fr));
       min-width: 100%;
     }
     .header {
@@ -263,6 +264,8 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const columns = ${columns};
+    const hasMetaColumns = columns.length > 0;
+    const displayColumns = hasMetaColumns ? columns : ['row'];
     const rowCount = ${rowCount};
     const pageSize = ${pageSize};
     const rowHeight = 28;
@@ -278,7 +281,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'openJson' });
     });
 
-    header.innerHTML = columns.map(c => '<div class="cell">' + escapeHtml(c) + '</div>').join('');
+    header.innerHTML = displayColumns.map(c => '<div class="cell">' + escapeHtml(c) + '</div>').join('');
     spacer.style.height = ((rowCount * rowHeight) + rowHeight) + 'px';
 
     window.addEventListener('message', event => {
@@ -309,7 +312,11 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       viewport.style.transform = 'translateY(' + (firstVisible * rowHeight) + 'px)';
       viewport.innerHTML = rows.map(item => {
         const row = item.row || {};
-        return '<div class="row">' + columns.map(col => '<div class="cell" title="' + escapeAttr(format(row[col])) + '">' + escapeHtml(format(row[col])) + '</div>').join('') + '</div>';
+        return '<div class="row">' + displayColumns.map(col => {
+          const value = hasMetaColumns ? row[col] : row;
+          const formatted = format(value);
+          return '<div class="cell" title="' + escapeAttr(formatted) + '">' + escapeHtml(formatted) + '</div>';
+        }).join('') + '</div>';
       }).join('');
     }
 
