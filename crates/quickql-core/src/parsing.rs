@@ -427,6 +427,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_dollar_reference() {
+        let query = parse_query("MAP whole = $, name = $.name").unwrap();
+
+        assert_eq!(
+            query,
+            Query {
+                steps: vec![SubQuery::Map(MapStep {
+                    config: Value::Object(Default::default()),
+                    mapping: vec![
+                        MapExpr::Specific {
+                            column: vec!["whole".to_string()],
+                            value: CaluculatedValue::Reference(vec!["$".to_string()]),
+                        },
+                        MapExpr::Specific {
+                            column: vec!["name".to_string()],
+                            value: CaluculatedValue::Reference(vec![
+                                "$".to_string(),
+                                "name".to_string()
+                            ]),
+                        },
+                    ],
+                })]
+            }
+        );
+    }
+
+    #[test]
     fn parses_map_many_with_include_columns() {
         let query = parse_query("MAP_MANY numbers INCLUDE day, index").unwrap();
 

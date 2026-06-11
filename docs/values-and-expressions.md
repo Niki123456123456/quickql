@@ -15,11 +15,18 @@ address.city
 order.shipping.country
 ```
 
+Use `$` to refer to the whole current row/value.
+
+```
+$
+$.name
+```
+
 If the path does not exist, the value is `null`.
 
 ```ql
 SOURCE OPEN('users.json')
-MAP id, city = address.city
+MAP id, city = address.city, row = $
 ```
 
 ---

@@ -40,7 +40,7 @@ bool_literal = @{ (^"true" | ^"false") ~ !(ASCII_ALPHANUMERIC | "_") }
 number       = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 identifier = @{ ident ~ ("." ~ ident)* }
-ident      = @{ (ASCII_ALPHANUMERIC | "_")+ }
+ident      = @{ "$" | (ASCII_ALPHANUMERIC | "_")+ }
 all_columns = @{ "*" }
 
 single_quoted_string = @{ "'" ~ ( "\\'" | !("'" | NEWLINE) ~ ANY )* ~ "'" }

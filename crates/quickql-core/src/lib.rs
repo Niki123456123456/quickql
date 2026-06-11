@@ -95,9 +95,15 @@ impl CaluculatedValue {
         match self {
             CaluculatedValue::Reference(path) => path
                 .iter()
-                .try_fold(value, |current, part| match current {
-                    Value::Object(map) => map.get(part),
-                    _ => None,
+                .try_fold(value, |current, part| {
+                    if part == "$" {
+                        return Some(current);
+                    }
+
+                    match current {
+                        Value::Object(map) => map.get(part),
+                        _ => None,
+                    }
                 })
                 .cloned()
                 .unwrap_or(Value::Null),
@@ -144,8 +150,9 @@ impl CaluculatedValue {
                         Value::Array(values.iter().flat_map(flatten_value).cloned().collect())
                     }
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
-                    "LEN" => serde_json::json!(values.len()),
+                    "LEN" => len_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
+                    "AT" => at_value(values.first(), values.get(1)),
                     "CROSSJOIN" => cross_join_value(values.first()),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
@@ -309,6 +316,13 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
+fn len_value(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_str)
+        .map(|value| serde_json::json!(value.chars().count()))
+        .unwrap_or(Value::Null)
+}
+
 fn value_truthy(value: &Value) -> bool {
     match value {
         Value::Bool(value) => *value,
@@ -339,6 +353,18 @@ fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
     }
 
     Value::Array(values)
+}
+
+fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
+    let (Some(values), Some(index)) = (
+        input.and_then(Value::as_array),
+        index.and_then(value_to_i64)
+            .and_then(|index| usize::try_from(index).ok()),
+    ) else {
+        return Value::Null;
+    };
+
+    values.get(index).cloned().unwrap_or(Value::Null)
 }
 
 fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
@@ -529,6 +555,34 @@ mod tests {
     }
 
     #[test]
+    fn dollar_reference_returns_current_value() {
+        let row = serde_json::json!({
+            "id": 1,
+            "nested": { "name": "Alice" }
+        });
+
+        assert_eq!(
+            CaluculatedValue::Reference(vec!["$".to_string()])
+                .caluculate(&row, Path::new(""), &mut Vec::new()),
+            row
+        );
+        assert_eq!(
+            CaluculatedValue::Reference(vec!["$".to_string(), "nested".to_string()])
+                .caluculate(&row, Path::new(""), &mut Vec::new()),
+            serde_json::json!({ "name": "Alice" })
+        );
+        assert_eq!(
+            CaluculatedValue::Reference(vec![
+                "nested".to_string(),
+                "$".to_string(),
+                "name".to_string()
+            ])
+            .caluculate(&row, Path::new(""), &mut Vec::new()),
+            serde_json::json!("Alice")
+        );
+    }
+
+    #[test]
     fn range_returns_inclusive_integer_values() {
         assert_eq!(
             calculate_function("RANGE", vec![number(0), number(2)]),
@@ -546,6 +600,67 @@ mod tests {
             calculate_function("RANGE", vec![number(2), number(0)]),
             serde_json::json!([2, 1, 0])
         );
+    }
+
+    #[test]
+    fn at_returns_array_item_by_zero_based_index() {
+        assert_eq!(
+            calculate_function("AT", vec![array(serde_json::json!(["a", "b", "c"])), number(1)]),
+            serde_json::json!("b")
+        );
+        assert_eq!(
+            calculate_function(
+                "at",
+                vec![
+                    array(serde_json::json!([{"id": 1}, {"id": 2}])),
+                    number(0),
+                ],
+            ),
+            serde_json::json!({ "id": 1 })
+        );
+    }
+
+    #[test]
+    fn at_returns_null_for_invalid_or_missing_input() {
+        assert_eq!(
+            calculate_function("AT", vec![array(serde_json::json!(["a"])), number(2)]),
+            Value::Null
+        );
+        assert_eq!(
+            calculate_function("AT", vec![array(serde_json::json!(["a"])), number(-1)]),
+            Value::Null
+        );
+        assert_eq!(calculate_function("AT", vec![number(1), number(0)]), Value::Null);
+        assert_eq!(
+            calculate_function("AT", vec![array(serde_json::json!(["a"]))]),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn len_returns_first_string_length() {
+        assert_eq!(
+            calculate_function("LEN", vec![string("quickql")]),
+            serde_json::json!(7)
+        );
+        assert_eq!(
+            calculate_function("len", vec![string("Grusse")]),
+            serde_json::json!(6)
+        );
+    }
+
+    #[test]
+    fn len_ignores_parameters_after_first_string() {
+        assert_eq!(
+            calculate_function("LEN", vec![string("abc"), string("longer")]),
+            serde_json::json!(3)
+        );
+    }
+
+    #[test]
+    fn len_returns_null_without_first_string() {
+        assert_eq!(calculate_function("LEN", vec![]), Value::Null);
+        assert_eq!(calculate_function("LEN", vec![number(123)]), Value::Null);
     }
 
     #[test]

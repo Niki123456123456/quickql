@@ -153,6 +153,17 @@ MAP values = RANGE(2, 0)      -- [2, 1, 0]
 
 ---
 
+### AT
+
+Returns the item in the first argument array at the zero-based integer index from the second argument. Returns `null` when the first argument is not an array, the index is invalid, or the index is out of range.
+
+```ql
+MAP first = AT(items, 0)
+MAP second = AT(['a', 'b', 'c'], 1)  -- 'b'
+```
+
+---
+
 ## Data-loading functions
 
 These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.
