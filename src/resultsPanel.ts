@@ -23,12 +23,18 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
     webviewView.webview.options = {
-      enableScripts: true
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', 'plotly.js-dist-min')
+      ]
     };
     webviewView.webview.onDidReceiveMessage(async message => {
       if (message?.type === 'page' && this.result) {
         const rows = await this.readRows(message.start, message.count);
         await this.view?.webview.postMessage({ type: 'page', start: message.start, rows });
+      } else if (message?.type === 'graphRow' && this.result) {
+        const rows = await this.readRows(0, 1);
+        await this.view?.webview.postMessage({ type: 'graphRow', row: rows[0] ?? null });
       } else if (message?.type === 'openJson' && this.result) {
         try {
           await this.openJsonResult(this.result);
@@ -109,7 +115,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (this.view) {
-      this.view.webview.html = this.result ? this.html(this.result) : this.emptyHtml();
+      this.view.webview.html = this.result ? this.html(this.result, this.view.webview) : this.emptyHtml();
     }
   }
 
@@ -134,13 +140,19 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 
-  private html(result: QueryResult): string {
+  private html(result: QueryResult, webview: vscode.Webview): string {
     const nonce = getNonce();
     const columns = JSON.stringify(result.columns);
     const rowCount = JSON.stringify(result.rowCount);
     const pageSize = result.pageSize;
     const renderedColumnCount = Math.max(result.columns.length, 1);
     const elapsed = Number.isFinite(result.elapsedMs) ? result.elapsedMs.toFixed(1) : '0.0';
+    const plotlyScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(
+      this.context.extensionUri,
+      'node_modules',
+      'plotly.js-dist-min',
+      'plotly.min.js'
+    ));
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -187,6 +199,13 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     .toolbar-spacer {
       flex: 1 1 auto;
     }
+    .view-switch {
+      display: inline-flex;
+      border: 1px solid var(--vscode-button-border, var(--border));
+      border-radius: 2px;
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
     button {
       border: 1px solid var(--vscode-button-border, transparent);
       border-radius: 2px;
@@ -197,6 +216,17 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       padding: 3px 9px;
       cursor: pointer;
       white-space: nowrap;
+    }
+    .view-switch button {
+      border: 0;
+      border-radius: 0;
+      color: var(--vscode-foreground);
+      background: transparent;
+      padding: 3px 8px;
+    }
+    .view-switch button.active {
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
     }
     button:hover {
       background: var(--vscode-button-hoverBackground);
@@ -245,6 +275,35 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     .row:hover {
       background: var(--row-hover);
     }
+    .graph {
+      display: none;
+      height: calc(100vh - 34px);
+      overflow: hidden;
+      position: relative;
+    }
+    .graph.active {
+      display: block;
+    }
+    .table.hidden {
+      display: none;
+    }
+    #graphPlot {
+      width: 100%;
+      height: 100%;
+    }
+    .graph-message {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .graph-message.active {
+      display: flex;
+    }
   </style>
 </head>
 <body>
@@ -253,6 +312,10 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     <span class="meta">${result.rowCount.toLocaleString()} rows</span>
     <span class="meta">${elapsed} ms</span>
     <span class="toolbar-spacer"></span>
+    <div class="view-switch" role="group" aria-label="Result view">
+      <button id="tableView" class="active" type="button" aria-pressed="true">Table</button>
+      <button id="graphView" type="button" aria-pressed="false">Graph</button>
+    </div>
     <button id="openJson" type="button" title="Open results as JSON">Open JSON</button>
   </div>
   <div id="table" class="table">
@@ -261,6 +324,11 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       <div id="viewport" class="viewport"></div>
     </div>
   </div>
+  <div id="graph" class="graph">
+    <div id="graphPlot"></div>
+    <div id="graphMessage" class="graph-message"></div>
+  </div>
+  <script nonce="${nonce}" src="${plotlyScriptUri}"></script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const columns = ${columns};
@@ -273,13 +341,25 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const header = document.getElementById('header');
     const spacer = document.getElementById('spacer');
     const viewport = document.getElementById('viewport');
+    const graph = document.getElementById('graph');
+    const graphPlot = document.getElementById('graphPlot');
+    const graphMessage = document.getElementById('graphMessage');
+    const tableView = document.getElementById('tableView');
+    const graphView = document.getElementById('graphView');
     const openJson = document.getElementById('openJson');
     const cache = new Map();
     const pending = new Set();
+    let activeView = 'table';
+    let graphRowRequested = false;
+    let graphRowLoaded = false;
+    let graphRow = null;
+    let graphRendered = false;
 
     openJson.addEventListener('click', () => {
       vscode.postMessage({ type: 'openJson' });
     });
+    tableView.addEventListener('click', () => setView('table'));
+    graphView.addEventListener('click', () => setView('graph'));
 
     header.innerHTML = displayColumns.map(c => '<div class="cell">' + escapeHtml(c) + '</div>').join('');
     spacer.style.height = ((rowCount * rowHeight) + rowHeight) + 'px';
@@ -290,6 +370,12 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         cache.set(message.start, message.rows);
         pending.delete(message.start);
         render();
+      } else if (message.type === 'graphRow') {
+        graphRowLoaded = true;
+        graphRow = message.row;
+        if (activeView === 'graph') {
+          renderGraph(graphRow);
+        }
       }
     });
 
@@ -318,6 +404,85 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
           return '<div class="cell" title="' + escapeAttr(formatted) + '">' + escapeHtml(formatted) + '</div>';
         }).join('') + '</div>';
       }).join('');
+    }
+
+    function setView(view) {
+      activeView = view;
+      const isGraph = view === 'graph';
+      table.classList.toggle('hidden', isGraph);
+      graph.classList.toggle('active', isGraph);
+      tableView.classList.toggle('active', !isGraph);
+      graphView.classList.toggle('active', isGraph);
+      tableView.setAttribute('aria-pressed', String(!isGraph));
+      graphView.setAttribute('aria-pressed', String(isGraph));
+
+      if (isGraph) {
+        requestGraphRow();
+        if (graphRowLoaded && !graphRendered) {
+          renderGraph(graphRow);
+        } else if (graphRendered && window.Plotly) {
+          Plotly.Plots.resize(graphPlot);
+        }
+      } else {
+        render();
+      }
+    }
+
+    function requestGraphRow() {
+      if (graphRowLoaded) return;
+      if (graphRowRequested) return;
+      graphRowRequested = true;
+      showGraphMessage('Loading graph...');
+      vscode.postMessage({ type: 'graphRow' });
+    }
+
+    function renderGraph(row) {
+      if (activeView !== 'graph') return;
+      if (!row) {
+        showGraphMessage('No result row available for graph view.');
+        return;
+      }
+
+      const spec = unwrapPlotSpec(row);
+      if (!spec || spec.data === undefined) {
+        showGraphMessage('The first result row must contain a data field for Plotly.');
+        return;
+      }
+
+      try {
+        hideGraphMessage();
+        const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {});
+        Plotly.newPlot(graphPlot, normalizePlotData(spec.data), spec.layout || {}, config);
+        graphRendered = true;
+      } catch (error) {
+        graphRendered = false;
+        showGraphMessage('Unable to render graph: ' + (error && error.message ? error.message : String(error)));
+      }
+    }
+
+    function unwrapPlotSpec(row) {
+      if (row && row.data !== undefined) return row;
+      const values = Object.values(row || {});
+      if (values.length === 1 && values[0] && typeof values[0] === 'object' && values[0].data !== undefined) {
+        return values[0];
+      }
+      return row;
+    }
+
+    function normalizePlotData(data) {
+      return Array.isArray(data) ? data : [data];
+    }
+
+    function showGraphMessage(message) {
+      graphMessage.textContent = message;
+      graphMessage.classList.add('active');
+      graphPlot.style.visibility = 'hidden';
+    }
+
+    function hideGraphMessage() {
+      graphMessage.textContent = '';
+      graphMessage.classList.remove('active');
+      graphPlot.style.visibility = 'visible';
     }
 
     function collectRows(start, count) {

@@ -117,6 +117,7 @@
     "typescript": "^5.5.4"
   },
   "dependencies": {
+    "plotly.js-dist-min": "^3.6.0",
     "vscode-languageclient": "^9.0.1"
   }
 }

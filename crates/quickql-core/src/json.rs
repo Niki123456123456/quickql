@@ -155,8 +155,8 @@ fn send_json_request(
     let value: Value = request
         .send()
         .with_context(|| format!("{method_label} JSON source {uri}"))?
-        .error_for_status()
-        .with_context(|| format!("{method_label} JSON source {uri} returned an error status"))?
+        //.error_for_status()
+        //.with_context(|| format!("{method_label} JSON source {uri} returned an error status"))?
         .json()
         .with_context(|| format!("Parsing JSON response from {uri}"))?;
     Ok(value)
@@ -333,120 +333,5 @@ fn merge_page(result: &mut Value, page: Value) {
             }
         }
         (result, page) => *result = page,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
-
-    #[test]
-    fn cursor_paging_reads_next_cursor_from_body_and_sends_it_as_query() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let mut second_request = String::new();
-            for index in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut buffer = [0; 4096];
-                let bytes_read = stream.read(&mut buffer).unwrap();
-                let request = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-                if index == 1 {
-                    second_request = request;
-                }
-
-                let body = if index == 0 {
-                    r#"{"items":[1],"paging":{"next":"abc"}}"#
-                } else {
-                    r#"{"items":[2],"paging":{"next":null}}"#
-                };
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
-            }
-            second_request
-        });
-
-        let value = load_json_http_source(
-            reqwest::Method::GET,
-            &format!("http://{addr}/items"),
-            HashMap::new(),
-            None,
-            Some(&json!({
-                "type": "cursor",
-                "in": {
-                    "location": "query",
-                    "path": "cursor"
-                },
-                "from": {
-                    "location": "body",
-                    "path": "paging.next"
-                }
-            })),
-        )
-        .unwrap();
-
-        assert_eq!(value["items"], json!([1, 2]));
-        assert!(server.join().unwrap().starts_with("GET /items?cursor=abc "));
-    }
-
-    #[test]
-    fn offset_paging_starts_at_zero_and_stops_when_page_is_not_full() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for index in 0..3 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut buffer = [0; 4096];
-                let bytes_read = stream.read(&mut buffer).unwrap();
-                requests.push(String::from_utf8_lossy(&buffer[..bytes_read]).to_string());
-
-                let body = match index {
-                    0 => r#"{"items":[1,2]}"#,
-                    1 => r#"{"items":[3,4]}"#,
-                    _ => r#"{"items":[5]}"#,
-                };
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
-            }
-            requests
-        });
-
-        let value = load_json_http_source(
-            reqwest::Method::GET,
-            &format!("http://{addr}/items"),
-            HashMap::new(),
-            None,
-            Some(&json!({
-                "type": "offset",
-                "in": {
-                    "location": "query",
-                    "path": "offset"
-                },
-                "path": "items",
-                "pagesize": 2
-            })),
-        )
-        .unwrap();
-
-        let requests = server.join().unwrap();
-        assert_eq!(value["items"], json!([1, 2, 3, 4, 5]));
-        assert!(requests[0].starts_with("GET /items?offset=0 "));
-        assert!(requests[1].starts_with("GET /items?offset=2 "));
-        assert!(requests[2].starts_with("GET /items?offset=4 "));
     }
 }

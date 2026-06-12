@@ -13,6 +13,7 @@ faer.workspace = true
 manifolds-rs.workspace = true
 pest.workspace = true
 pest_derive.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

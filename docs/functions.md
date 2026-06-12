@@ -164,6 +164,21 @@ MAP second = AT(['a', 'b', 'c'], 1)  -- 'b'
 
 ---
 
+### ZIPROWS
+
+Converts an object whose fields are arrays into an array of row objects by matching values at the same index. Returns `null` when the input is not an object, any field is not an array, or the arrays have different lengths.
+
+```ql
+MAP rows = ZIPROWS({name: ['a', 'b', 'c'], value: [1, 2, 3]})
+-- [
+--   {name: 'a', value: 1},
+--   {name: 'b', value: 2},
+--   {name: 'c', value: 3}
+-- ]
+```
+
+---
+
 ## Data-loading functions
 
 These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.

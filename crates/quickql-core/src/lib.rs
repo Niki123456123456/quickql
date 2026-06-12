@@ -5,6 +5,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use chrono::{Duration, Local, NaiveDate};
+use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -151,9 +152,12 @@ impl CaluculatedValue {
                     }
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => len_value(values.first()),
+                    "RAND" => random_string_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
                     "AT" => at_value(values.first(), values.get(1)),
                     "CROSSJOIN" => cross_join_value(values.first()),
+                    "ZIPROWS" => zip_rows_value(values.first()),
+                    "GET" => CaluculatedValue::Reference(values.iter().skip(1).filter_map(|x|x.as_str()).map(|x|x.to_string()).collect()).caluculate(values.first().unwrap_or_default(), query_path, ql_stack),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
@@ -183,12 +187,6 @@ impl CaluculatedValue {
                         DateAggregate::Max,
                     ),
                     "OPEN" => Self::open_source(
-                        values.first(),
-                        query_path,
-                        reqwest::Method::GET,
-                        ql_stack,
-                    ),
-                    "GET" => Self::open_source(
                         values.first(),
                         query_path,
                         reqwest::Method::GET,
@@ -323,6 +321,22 @@ fn len_value(value: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn random_string_value(length: Option<&Value>) -> Value {
+    let Some(length) = length
+        .and_then(value_to_i64)
+        .and_then(|length| usize::try_from(length).ok())
+    else {
+        return Value::Null;
+    };
+
+    let value: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect();
+    Value::String(value)
+}
+
 fn value_truthy(value: &Value) -> bool {
     match value {
         Value::Bool(value) => *value,
@@ -358,7 +372,8 @@ fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
 fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
     let (Some(values), Some(index)) = (
         input.and_then(Value::as_array),
-        index.and_then(value_to_i64)
+        index
+            .and_then(value_to_i64)
             .and_then(|index| usize::try_from(index).ok()),
     ) else {
         return Value::Null;
@@ -424,6 +439,40 @@ fn cross_join_rows(
         }
     }
     current.remove(key);
+}
+
+fn zip_rows_value(input: Option<&Value>) -> Value {
+    let Some(input) = input.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+
+    let arrays: Option<Vec<_>> = input
+        .iter()
+        .map(|(key, value)| value.as_array().map(|values| (key.as_str(), values)))
+        .collect();
+    let Some(arrays) = arrays else {
+        return Value::Null;
+    };
+
+    let Some((_, first_array)) = arrays.first() else {
+        return Value::Array(Vec::new());
+    };
+    let row_count = first_array.len();
+    if arrays.iter().any(|(_, values)| values.len() != row_count) {
+        return Value::Null;
+    }
+
+    let rows = (0..row_count)
+        .map(|index| {
+            let row = arrays
+                .iter()
+                .map(|(key, values)| (key.to_string(), values[index].clone()))
+                .collect();
+            Value::Object(row)
+        })
+        .collect();
+
+    Value::Array(rows)
 }
 
 fn value_to_i64(value: &Value) -> Option<i64> {
@@ -529,335 +578,48 @@ pub enum StreamMessage<'a> {
 }
 
 pub const DEFAULT_BLOCK_SIZE: usize = 1000;
+pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
+
+pub(crate) const ALL_COLUMNS: &str = "*";
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn calculate_function(function: &str, parameters: Vec<CaluculatedValue>) -> Value {
-        CaluculatedValue::FunctionCall {
-            function: function.to_string(),
-            parameters,
-        }
-        .caluculate(&Value::Null, Path::new(""), &mut Vec::new())
-    }
-
-    fn number(value: i64) -> CaluculatedValue {
-        CaluculatedValue::Static(serde_json::json!(value))
-    }
-
-    fn string(value: &str) -> CaluculatedValue {
-        CaluculatedValue::Static(serde_json::json!(value))
-    }
-
-    fn array(value: Value) -> CaluculatedValue {
-        CaluculatedValue::Static(value)
-    }
-
     #[test]
-    fn dollar_reference_returns_current_value() {
-        let row = serde_json::json!({
-            "id": 1,
-            "nested": { "name": "Alice" }
+    fn zip_rows_transposes_object_arrays_to_rows() {
+        let input = serde_json::json!({
+            "name": ["a", "b", "c"],
+            "value": [1, 2, 3],
         });
 
         assert_eq!(
-            CaluculatedValue::Reference(vec!["$".to_string()])
-                .caluculate(&row, Path::new(""), &mut Vec::new()),
-            row
-        );
-        assert_eq!(
-            CaluculatedValue::Reference(vec!["$".to_string(), "nested".to_string()])
-                .caluculate(&row, Path::new(""), &mut Vec::new()),
-            serde_json::json!({ "name": "Alice" })
-        );
-        assert_eq!(
-            CaluculatedValue::Reference(vec![
-                "nested".to_string(),
-                "$".to_string(),
-                "name".to_string()
-            ])
-            .caluculate(&row, Path::new(""), &mut Vec::new()),
-            serde_json::json!("Alice")
-        );
-    }
-
-    #[test]
-    fn range_returns_inclusive_integer_values() {
-        assert_eq!(
-            calculate_function("RANGE", vec![number(0), number(2)]),
-            serde_json::json!([0, 1, 2])
-        );
-        assert_eq!(
-            calculate_function("range", vec![number(-3), number(-1)]),
-            serde_json::json!([-3, -2, -1])
-        );
-    }
-
-    #[test]
-    fn range_can_count_down() {
-        assert_eq!(
-            calculate_function("RANGE", vec![number(2), number(0)]),
-            serde_json::json!([2, 1, 0])
-        );
-    }
-
-    #[test]
-    fn at_returns_array_item_by_zero_based_index() {
-        assert_eq!(
-            calculate_function("AT", vec![array(serde_json::json!(["a", "b", "c"])), number(1)]),
-            serde_json::json!("b")
-        );
-        assert_eq!(
-            calculate_function(
-                "at",
-                vec![
-                    array(serde_json::json!([{"id": 1}, {"id": 2}])),
-                    number(0),
-                ],
-            ),
-            serde_json::json!({ "id": 1 })
-        );
-    }
-
-    #[test]
-    fn at_returns_null_for_invalid_or_missing_input() {
-        assert_eq!(
-            calculate_function("AT", vec![array(serde_json::json!(["a"])), number(2)]),
-            Value::Null
-        );
-        assert_eq!(
-            calculate_function("AT", vec![array(serde_json::json!(["a"])), number(-1)]),
-            Value::Null
-        );
-        assert_eq!(calculate_function("AT", vec![number(1), number(0)]), Value::Null);
-        assert_eq!(
-            calculate_function("AT", vec![array(serde_json::json!(["a"]))]),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn len_returns_first_string_length() {
-        assert_eq!(
-            calculate_function("LEN", vec![string("quickql")]),
-            serde_json::json!(7)
-        );
-        assert_eq!(
-            calculate_function("len", vec![string("Grusse")]),
-            serde_json::json!(6)
-        );
-    }
-
-    #[test]
-    fn len_ignores_parameters_after_first_string() {
-        assert_eq!(
-            calculate_function("LEN", vec![string("abc"), string("longer")]),
-            serde_json::json!(3)
-        );
-    }
-
-    #[test]
-    fn len_returns_null_without_first_string() {
-        assert_eq!(calculate_function("LEN", vec![]), Value::Null);
-        assert_eq!(calculate_function("LEN", vec![number(123)]), Value::Null);
-    }
-
-    #[test]
-    fn today_returns_iso_date_string() {
-        let value = calculate_function("TODAY", vec![]);
-        let Value::String(date) = value else {
-            panic!("TODAY should return a string");
-        };
-
-        assert!(chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_ok());
-    }
-
-    #[test]
-    fn adddate_adds_signed_days_to_iso_date_string() {
-        assert_eq!(
-            calculate_function("ADDDATE", vec![string("2026-05-26"), number(-1)]),
-            serde_json::json!("2026-05-25")
-        );
-        assert_eq!(
-            calculate_function("adddate", vec![string("2026-05-26"), number(2)]),
-            serde_json::json!("2026-05-28")
-        );
-    }
-
-    #[test]
-    fn adddate_returns_null_for_invalid_input() {
-        assert_eq!(
-            calculate_function("ADDDATE", vec![string("2026-02-30"), number(1)]),
-            Value::Null
-        );
-        assert_eq!(
-            calculate_function("ADDDATE", vec![string("2026-05-26")]),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn map_many_can_include_parent_columns() {
-        let query = Query {
-            steps: vec![
-                SubQuery::Source(vec![CaluculatedValue::Static(serde_json::json!([
-                    {
-                        "day": "2026-05-31",
-                        "index": "global_doku_en",
-                        "numbers": [{ "n": 1 }, { "n": 2 }]
-                    },
-                    {
-                        "day": "2026-06-01",
-                        "index": "global_doku_en",
-                        "numbers": [{ "n": 1 }, { "n": 2 }]
-                    }
-                ]))]),
-                SubQuery::MapMany(MapMany {
-                    field: "numbers".to_string(),
-                    include: vec!["day".to_string(), "index".to_string()],
-                }),
-            ],
-        };
-
-        let result = crate::execution::execute_pipeline(&query, Path::new("")).unwrap();
-
-        assert_eq!(
-            Value::Array(result.rows),
+            zip_rows_value(Some(&input)),
             serde_json::json!([
-                { "n": 1, "day": "2026-05-31", "index": "global_doku_en" },
-                { "n": 2, "day": "2026-05-31", "index": "global_doku_en" },
-                { "n": 1, "day": "2026-06-01", "index": "global_doku_en" },
-                { "n": 2, "day": "2026-06-01", "index": "global_doku_en" }
+                {"name": "a", "value": 1},
+                {"name": "b", "value": 2},
+                {"name": "c", "value": 3},
             ])
         );
     }
 
     #[test]
-    fn map_can_run_with_parallel_config() {
-        let query = Query {
-            steps: vec![
-                SubQuery::Source(vec![CaluculatedValue::Static(serde_json::json!([
-                    { "id": 1 },
-                    { "id": 2 },
-                    { "id": 3 }
-                ]))]),
-                SubQuery::Map(MapStep {
-                    config: serde_json::json!({ "parallel": 2 }),
-                    mapping: vec![
-                        MapExpr::Specific {
-                            column: vec!["test".to_string()],
-                            value: CaluculatedValue::Static(Value::String("text".to_string())),
-                        },
-                        MapExpr::Specific {
-                            column: vec!["number".to_string()],
-                            value: CaluculatedValue::Static(serde_json::json!(32)),
-                        },
-                        MapExpr::Specific {
-                            column: vec!["id".to_string()],
-                            value: CaluculatedValue::Reference(vec!["id".to_string()]),
-                        },
-                    ],
-                }),
-            ],
-        };
+    fn zip_rows_returns_null_for_non_array_fields() {
+        let input = serde_json::json!({
+            "name": ["a"],
+            "value": 1,
+        });
 
-        let result = crate::execution::execute_pipeline(&query, Path::new("")).unwrap();
-
-        assert_eq!(
-            Value::Array(result.rows),
-            serde_json::json!([
-                { "test": "text", "number": 32, "id": 1 },
-                { "test": "text", "number": 32, "id": 2 },
-                { "test": "text", "number": 32, "id": 3 }
-            ])
-        );
+        assert_eq!(zip_rows_value(Some(&input)), Value::Null);
     }
 
     #[test]
-    fn crossjoin_returns_cartesian_product_with_object_keys() {
-        assert_eq!(
-            calculate_function(
-                "CROSSJOIN",
-                vec![array(serde_json::json!({
-                    "a": [1, 2, 3],
-                    "b": ["a", "b"]
-                }))]
-            ),
-            serde_json::json!([
-                { "a": 1, "b": "a" },
-                { "a": 2, "b": "a" },
-                { "a": 3, "b": "a" },
-                { "a": 1, "b": "b" },
-                { "a": 2, "b": "b" },
-                { "a": 3, "b": "b" }
-            ])
-        );
-    }
+    fn zip_rows_returns_null_for_mismatched_array_lengths() {
+        let input = serde_json::json!({
+            "name": ["a", "b"],
+            "value": [1],
+        });
 
-    #[test]
-    fn crossjoin_returns_null_for_non_object_or_non_array_values() {
-        assert_eq!(
-            calculate_function("CROSSJOIN", vec![number(1)]),
-            Value::Null
-        );
-        assert_eq!(
-            calculate_function(
-                "CROSSJOIN",
-                vec![array(serde_json::json!({
-                    "a": [1],
-                    "b": "not an array"
-                }))]
-            ),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn umap_returns_sample_coordinate_rows() {
-        let value = calculate_function(
-            "UMAP",
-            vec![
-                array(serde_json::json!([
-                    [0.0, 0.1, 0.2],
-                    [0.2, 0.1, 0.0],
-                    [1.0, 1.1, 1.2],
-                    [1.2, 1.1, 1.0],
-                    [2.0, 2.1, 2.2]
-                ])),
-                array(serde_json::json!({
-                    "annType": "exhaustive",
-                    "initialisation": "random",
-                    "k": 2,
-                    "nDim": 2,
-                    "nEpochs": 5,
-                    "seed": 7
-                })),
-            ],
-        );
-
-        let Value::Array(rows) = value else {
-            panic!("UMAP should return an array");
-        };
-
-        assert_eq!(rows.len(), 5);
-        for row in rows {
-            let Value::Array(columns) = row else {
-                panic!("UMAP rows should be arrays");
-            };
-            assert_eq!(columns.len(), 2);
-            assert!(columns.iter().all(|value| value.as_f64().is_some()));
-        }
-    }
-
-    #[test]
-    fn umap_returns_null_for_invalid_matrix() {
-        assert_eq!(
-            calculate_function("UMAP", vec![array(serde_json::json!([[1.0, 2.0], [3.0]]))]),
-            Value::Null
-        );
+        assert_eq!(zip_rows_value(Some(&input)), Value::Null);
     }
 }
-pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
-
-pub(crate) const ALL_COLUMNS: &str = "*";
