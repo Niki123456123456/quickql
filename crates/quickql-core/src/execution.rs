@@ -249,24 +249,21 @@ fn map_row(
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
 ) -> Value {
-    let mut output = Map::new();
+    let mut output = Value::Object(Map::new());
     for expr in mapping {
         match expr {
             MapExpr::All => {
                 if let Value::Object(map) = row {
-                    output.extend(map.clone());
+                    output_as_object_mut(&mut output).extend(map.clone());
                 }
             }
             MapExpr::Specific { column, value } => {
-                set_path(
-                    &mut output,
-                    column,
-                    value.caluculate(row, query_path, ql_stack),
-                );
+                let value = value.caluculate(row, query_path, ql_stack);
+                assign_output(&mut output, column, value);
             }
         }
     }
-    Value::Object(output)
+    output
 }
 
 fn apply_filter(
@@ -575,6 +572,25 @@ fn get_path(value: &Value, path: &[String]) -> Value {
         })
         .cloned()
         .unwrap_or(Value::Null)
+}
+
+fn is_whole_output_column(path: &[String]) -> bool {
+    path.len() == 1 && path[0] == "$"
+}
+
+pub(crate) fn assign_output(output: &mut Value, path: &[String], value: Value) {
+    if is_whole_output_column(path) {
+        *output = value;
+    } else {
+        set_path(output_as_object_mut(output), path, value);
+    }
+}
+
+fn output_as_object_mut(output: &mut Value) -> &mut Map<String, Value> {
+    if !output.is_object() {
+        *output = Value::Object(Map::new());
+    }
+    output.as_object_mut().unwrap()
 }
 
 fn set_path(output: &mut Map<String, Value>, path: &[String], value: Value) {

@@ -47,6 +47,17 @@ GROUP_BY customer_id MAP order_ids = ARRAY(id)
 
 ---
 
+### ASSIGN
+
+Shallow-merges object fields like JavaScript `Object.assign`. Later objects overwrite earlier fields. Returns `null` when any argument is not an object.
+
+```ql
+MAP merged = ASSIGN({name: 'a', nested: {left: 1}}, {value: 2, nested: {right: 2}})
+-- {name: 'a', value: 2, nested: {right: 2}}
+```
+
+---
+
 ### MINDATE / MAXDATE
 
 Returns the earliest or latest date string from a set. Understands ISO date formats: `YYYY-MM-DD`, `DD-MM-YYYY`, `DD.MM.YYYY`, and ISO datetimes (`YYYY-MM-DDTHH:MM:SS...`). Returns `null` if no parseable date is found.
@@ -78,6 +89,17 @@ Base64-encodes the string representation of its argument.
 ```ql
 SOURCE OPEN('api_keys.json')
 MAP id, encoded = BASE64(secret)
+```
+
+---
+
+### PARSE
+
+Parses a JSON string and returns the resulting JSON value. Returns `null` when the input is not a string or is not valid JSON.
+
+```ql
+MAP parsed = PARSE('{"name":"a","value":1}')
+-- {name: 'a', value: 1}
 ```
 
 ---

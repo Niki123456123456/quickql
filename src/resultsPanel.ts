@@ -32,9 +32,9 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       if (message?.type === 'page' && this.result) {
         const rows = await this.readRows(message.start, message.count);
         await this.view?.webview.postMessage({ type: 'page', start: message.start, rows });
-      } else if (message?.type === 'graphRow' && this.result) {
-        const rows = await this.readRows(0, 1);
-        await this.view?.webview.postMessage({ type: 'graphRow', row: rows[0] ?? null });
+      } else if (message?.type === 'graphRows' && this.result) {
+        const rows = await this.readRows(0, this.result.rowCount);
+        await this.view?.webview.postMessage({ type: 'graphRows', rows });
       } else if (message?.type === 'openJson' && this.result) {
         try {
           await this.openJsonResult(this.result);
@@ -278,7 +278,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     .graph {
       display: none;
       height: calc(100vh - 34px);
-      overflow: hidden;
+      overflow: auto;
       position: relative;
     }
     .graph.active {
@@ -288,8 +288,25 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       display: none;
     }
     #graphPlot {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 32px;
+      min-height: 100%;
+      padding: 8px;
+      width: 100%;
+    }
+    .graph-item {
+      flex: 0 0 auto;
+      height: min(760px, calc(100vh - 82px));
+      min-height: 420px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .graph-item-plot {
       width: 100%;
       height: 100%;
+      min-height: 0;
     }
     .graph-message {
       position: absolute;
@@ -350,9 +367,9 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const cache = new Map();
     const pending = new Set();
     let activeView = 'table';
-    let graphRowRequested = false;
-    let graphRowLoaded = false;
-    let graphRow = null;
+    let graphRowsRequested = false;
+    let graphRowsLoaded = false;
+    let graphRows = [];
     let graphRendered = false;
 
     openJson.addEventListener('click', () => {
@@ -370,11 +387,11 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         cache.set(message.start, message.rows);
         pending.delete(message.start);
         render();
-      } else if (message.type === 'graphRow') {
-        graphRowLoaded = true;
-        graphRow = message.row;
+      } else if (message.type === 'graphRows') {
+        graphRowsLoaded = true;
+        graphRows = message.rows || [];
         if (activeView === 'graph') {
-          renderGraph(graphRow);
+          renderGraph(graphRows);
         }
       }
     });
@@ -417,42 +434,51 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
       graphView.setAttribute('aria-pressed', String(isGraph));
 
       if (isGraph) {
-        requestGraphRow();
-        if (graphRowLoaded && !graphRendered) {
-          renderGraph(graphRow);
+        requestGraphRows();
+        if (graphRowsLoaded && !graphRendered) {
+          renderGraph(graphRows);
         } else if (graphRendered && window.Plotly) {
-          Plotly.Plots.resize(graphPlot);
+          resizeGraphs();
         }
       } else {
         render();
       }
     }
 
-    function requestGraphRow() {
-      if (graphRowLoaded) return;
-      if (graphRowRequested) return;
-      graphRowRequested = true;
+    function requestGraphRows() {
+      if (graphRowsLoaded) return;
+      if (graphRowsRequested) return;
+      graphRowsRequested = true;
       showGraphMessage('Loading graph...');
-      vscode.postMessage({ type: 'graphRow' });
+      vscode.postMessage({ type: 'graphRows' });
     }
 
-    function renderGraph(row) {
+    function renderGraph(rows) {
       if (activeView !== 'graph') return;
-      if (!row) {
-        showGraphMessage('No result row available for graph view.');
+      if (!Array.isArray(rows) || rows.length === 0) {
+        showGraphMessage('No result rows available for graph view.');
         return;
       }
 
-      const spec = unwrapPlotSpec(row);
-      if (!spec || spec.data === undefined) {
-        showGraphMessage('The first result row must contain a data field for Plotly.');
+      const specs = rows
+        .map(unwrapPlotSpec)
+        .filter(spec => spec && spec.data !== undefined);
+      if (specs.length === 0) {
+        showGraphMessage('At least one result row must contain a data field for Plotly.');
         return;
       }
 
       try {
         hideGraphMessage();
-        const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {});
-        Plotly.newPlot(graphPlot, normalizePlotData(spec.data), spec.layout || {}, config);
+        graphPlot.innerHTML = specs.map((_, index) =>
+          '<div class="graph-item"><div id="graphItem' + index + '" class="graph-item-plot"></div></div>'
+        ).join('');
+
+        specs.forEach((spec, index) => {
+          const item = document.getElementById('graphItem' + index);
+          const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {});
+          Plotly.newPlot(item, normalizePlotData(spec.data), spec.layout || {}, config);
+        });
         graphRendered = true;
       } catch (error) {
         graphRendered = false;
@@ -471,6 +497,12 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
     function normalizePlotData(data) {
       return Array.isArray(data) ? data : [data];
+    }
+
+    function resizeGraphs() {
+      graphPlot.querySelectorAll('.graph-item-plot').forEach(plot => {
+        Plotly.Plots.resize(plot);
+      });
     }
 
     function showGraphMessage(message) {

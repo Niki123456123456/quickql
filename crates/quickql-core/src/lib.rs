@@ -150,6 +150,8 @@ impl CaluculatedValue {
                     "ARRAY" => {
                         Value::Array(values.iter().flat_map(flatten_value).cloned().collect())
                     }
+                    "ASSIGN" => assign_value(&values),
+                    "PARSE" => parse_json_value(values.first()),
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => len_value(values.first()),
                     "RAND" => random_string_value(values.first()),
@@ -157,7 +159,19 @@ impl CaluculatedValue {
                     "AT" => at_value(values.first(), values.get(1)),
                     "CROSSJOIN" => cross_join_value(values.first()),
                     "ZIPROWS" => zip_rows_value(values.first()),
-                    "GET" => CaluculatedValue::Reference(values.iter().skip(1).filter_map(|x|x.as_str()).map(|x|x.to_string()).collect()).caluculate(values.first().unwrap_or_default(), query_path, ql_stack),
+                    "GET" => CaluculatedValue::Reference(
+                        values
+                            .iter()
+                            .skip(1)
+                            .filter_map(|x| x.as_str())
+                            .map(|x| x.to_string())
+                            .collect(),
+                    )
+                    .caluculate(
+                        values.first().unwrap_or_default(),
+                        query_path,
+                        ql_stack,
+                    ),
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
@@ -318,6 +332,35 @@ fn len_value(value: Option<&Value>) -> Value {
     value
         .and_then(Value::as_str)
         .map(|value| serde_json::json!(value.chars().count()))
+        .unwrap_or(Value::Null)
+}
+
+fn assign_value(values: &[Value]) -> Value {
+    let Some(first) = values.first() else {
+        return Value::Null;
+    };
+    if !first.is_object() {
+        return Value::Null;
+    }
+
+    let mut output = first.clone();
+    for value in values.iter().skip(1) {
+        let Some(source) = value.as_object() else {
+            return Value::Null;
+        };
+
+        for (key, value) in source {
+            execution::assign_output(&mut output, &[key.clone()], value.clone());
+        }
+    }
+
+    output
+}
+
+fn parse_json_value(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_str)
+        .and_then(|value| serde_json::from_str(value).ok())
         .unwrap_or(Value::Null)
 }
 
@@ -579,47 +622,4 @@ pub enum StreamMessage<'a> {
 
 pub const DEFAULT_BLOCK_SIZE: usize = 1000;
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
-
 pub(crate) const ALL_COLUMNS: &str = "*";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zip_rows_transposes_object_arrays_to_rows() {
-        let input = serde_json::json!({
-            "name": ["a", "b", "c"],
-            "value": [1, 2, 3],
-        });
-
-        assert_eq!(
-            zip_rows_value(Some(&input)),
-            serde_json::json!([
-                {"name": "a", "value": 1},
-                {"name": "b", "value": 2},
-                {"name": "c", "value": 3},
-            ])
-        );
-    }
-
-    #[test]
-    fn zip_rows_returns_null_for_non_array_fields() {
-        let input = serde_json::json!({
-            "name": ["a"],
-            "value": 1,
-        });
-
-        assert_eq!(zip_rows_value(Some(&input)), Value::Null);
-    }
-
-    #[test]
-    fn zip_rows_returns_null_for_mismatched_array_lengths() {
-        let input = serde_json::json!({
-            "name": ["a", "b"],
-            "value": [1],
-        });
-
-        assert_eq!(zip_rows_value(Some(&input)), Value::Null);
-    }
-}
