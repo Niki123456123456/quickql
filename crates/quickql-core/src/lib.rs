@@ -154,6 +154,7 @@ impl CaluculatedValue {
                     "PARSE" => parse_json_value(values.first()),
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => len_value(values.first()),
+                    "SPLIT" => split_value(values.first(), values.get(1)),
                     "RAND" => random_string_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
                     "AT" => at_value(values.first(), values.get(1)),
@@ -333,6 +334,45 @@ fn len_value(value: Option<&Value>) -> Value {
         .and_then(Value::as_str)
         .map(|value| serde_json::json!(value.chars().count()))
         .unwrap_or(Value::Null)
+}
+
+fn split_value(input: Option<&Value>, max_part_length: Option<&Value>) -> Value {
+    let (Some(input), Some(max_part_length)) = (
+        input.and_then(Value::as_str),
+        max_part_length
+            .and_then(value_to_i64)
+            .and_then(|length| usize::try_from(length).ok())
+            .filter(|length| *length > 0),
+    ) else {
+        return Value::Null;
+    };
+
+    let char_count = input.chars().count();
+    if char_count == 0 {
+        return Value::Array(Vec::new());
+    }
+
+    let part_count = char_count.div_ceil(max_part_length);
+    let base_part_length = char_count / part_count;
+    let longer_part_count = char_count % part_count;
+    let byte_indices: Vec<_> = input
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(input.len()))
+        .collect();
+
+    let mut start = 0;
+    let parts = (0..part_count)
+        .map(|index| {
+            let part_length = base_part_length + usize::from(index < longer_part_count);
+            let end = start + part_length;
+            let part = Value::String(input[byte_indices[start]..byte_indices[end]].to_string());
+            start = end;
+            part
+        })
+        .collect();
+
+    Value::Array(parts)
 }
 
 fn assign_value(values: &[Value]) -> Value {
@@ -635,3 +675,56 @@ pub enum StreamMessage<'a> {
 pub const DEFAULT_BLOCK_SIZE: usize = 1000;
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
 pub(crate) const ALL_COLUMNS: &str = "*";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_value_splits_string_into_equal_parts_under_max_length() {
+        assert_eq!(
+            split_value(
+                Some(&serde_json::json!("abcdefghij")),
+                Some(&serde_json::json!(3))
+            ),
+            serde_json::json!(["abc", "def", "gh", "ij"])
+        );
+    }
+
+    #[test]
+    fn split_value_distributes_remainder_across_first_parts() {
+        assert_eq!(
+            split_value(
+                Some(&serde_json::json!("abcdefghij")),
+                Some(&serde_json::json!(4))
+            ),
+            serde_json::json!(["abcd", "efg", "hij"])
+        );
+    }
+
+    #[test]
+    fn split_value_counts_characters_not_bytes() {
+        assert_eq!(
+            split_value(
+                Some(&serde_json::json!("åßcd")),
+                Some(&serde_json::json!(2))
+            ),
+            serde_json::json!(["åß", "cd"])
+        );
+    }
+
+    #[test]
+    fn split_value_rejects_invalid_input() {
+        assert_eq!(
+            split_value(Some(&serde_json::json!("abc")), Some(&serde_json::json!(0))),
+            Value::Null
+        );
+        assert_eq!(
+            split_value(
+                Some(&serde_json::json!(["abc"])),
+                Some(&serde_json::json!(2))
+            ),
+            Value::Null
+        );
+    }
+}

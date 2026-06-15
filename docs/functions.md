@@ -93,6 +93,17 @@ MAP id, encoded = BASE64(secret)
 
 ---
 
+### SPLIT
+
+Splits a string into equal parts with the given maximum part length. Returns `null` when the first argument is not a string or the length is not a positive integer.
+
+```ql
+MAP parts = SPLIT('abcdefghij', 4)
+-- ['abcd', 'efg', 'hij']
+```
+
+---
+
 ### PARSE
 
 Parses a JSON string and returns the resulting JSON value. Returns `null` when the input is not a string or is not valid JSON.
