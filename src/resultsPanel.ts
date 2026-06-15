@@ -12,11 +12,21 @@ export interface QueryResult {
   pages: Map<number, Record<string, unknown>[]>;
 }
 
+export interface QueryProgress {
+  substep: number;
+  totalSubsteps: number;
+  substepName: string;
+  percent: number;
+  elapsedMs: number;
+  remainingMs?: number;
+}
+
 export class ResultsViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'quickql.results';
 
   private view: vscode.WebviewView | undefined;
   private result: QueryResult | undefined;
+  private progress: QueryProgress | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -49,6 +59,13 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
   setResult(result: QueryResult): void {
     this.result = result;
+    this.progress = undefined;
+    this.render();
+  }
+
+  setProgress(progress: QueryProgress): void {
+    this.result = undefined;
+    this.progress = progress;
     this.render();
   }
 
@@ -115,8 +132,68 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (this.view) {
-      this.view.webview.html = this.result ? this.html(this.result, this.view.webview) : this.emptyHtml();
+      this.view.webview.html = this.result
+        ? this.html(this.result, this.view.webview)
+        : this.progress
+          ? this.progressHtml(this.progress)
+          : this.emptyHtml();
     }
+  }
+
+  private progressHtml(progress: QueryProgress): string {
+    const percent = Math.max(0, Math.min(100, progress.percent));
+    const remaining = Number.isFinite(progress.remainingMs)
+      ? formatDuration(progress.remainingMs)
+      : 'estimating';
+    const elapsed = formatDuration(progress.elapsedMs);
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-editor-foreground);
+      background: var(--vscode-editor-background);
+    }
+    .progress {
+      max-width: 560px;
+    }
+    .label {
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .meta {
+      margin-top: 8px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .bar {
+      height: 8px;
+      border: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editorWidget-background);
+      overflow: hidden;
+    }
+    .fill {
+      height: 100%;
+      width: ${percent.toFixed(2)}%;
+      background: var(--vscode-progressBar-background);
+    }
+  </style>
+</head>
+<body>
+  <div class="progress">
+    <div class="label">${escapeHtml(progress.substepName)} ${progress.substep}/${progress.totalSubsteps} - ${percent.toFixed(1)}%</div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent.toFixed(0)}">
+      <div class="fill"></div>
+    </div>
+    <div class="meta">Elapsed ${escapeHtml(elapsed)} - Remaining ${escapeHtml(remaining)}</div>
+  </div>
+</body>
+</html>`;
   }
 
   private emptyHtml(): string {
@@ -552,6 +629,22 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch));
+}
+
+function formatDuration(milliseconds: number | undefined): string {
+  if (!Number.isFinite(milliseconds)) {
+    return '0 ms';
+  }
+
+  const value = Math.max(0, milliseconds ?? 0);
+  if (value < 1000) {
+    return `${Math.round(value)} ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)} seconds`;
+  }
+
+  return `${(value / 60_000).toFixed(1)} minutes`;
 }
 
 function writeToStream(stream: fs.WriteStream, chunk: string): Promise<void> {

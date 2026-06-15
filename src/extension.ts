@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
-import { QueryResult, ResultsViewProvider } from './resultsPanel';
+import { QueryProgress, QueryResult, ResultsViewProvider } from './resultsPanel';
 
 let client: LanguageClient | undefined;
 let resultsProvider: ResultsViewProvider;
@@ -75,7 +75,10 @@ async function runActiveQuery(context: vscode.ExtensionContext): Promise<void> {
       cancellable: false
     },
     async () => {
-      const result = await runEngine(engine, editor.document.uri.fsPath, cwd, pageSize);
+      await vscode.commands.executeCommand('quickql.results.focus');
+      const result = await runEngine(engine, editor.document.uri.fsPath, cwd, pageSize, progress => {
+        resultsProvider.setProgress(progress);
+      });
       resultsProvider.setResult(result);
       await vscode.commands.executeCommand('quickql.results.focus');
     }
@@ -107,9 +110,29 @@ interface StreamDone {
   elapsed_ms?: number;
 }
 
-type StreamMessage = StreamMeta | StreamRow | StreamBatch | StreamDone;
+interface StreamProgress {
+  type: 'progress';
+  substep: number;
+  totalSubsteps?: number;
+  total_substeps?: number;
+  substepName?: string;
+  substep_name?: string;
+  percent: number;
+  elapsedMs?: number;
+  elapsed_ms?: number;
+  remainingMs?: number;
+  remaining_ms?: number;
+}
 
-function runEngine(engine: string, queryPath: string, cwd: string, pageSize: number): Promise<QueryResult> {
+type StreamMessage = StreamMeta | StreamRow | StreamBatch | StreamDone | StreamProgress;
+
+function runEngine(
+  engine: string,
+  queryPath: string,
+  cwd: string,
+  pageSize: number,
+  onProgress: (progress: QueryProgress) => void
+): Promise<QueryResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(engine, ['stream', '--query', queryPath, '--batch-size', String(pageSize)], { cwd });
     let stderr = '';
@@ -190,6 +213,15 @@ function runEngine(engine: string, queryPath: string, cwd: string, pageSize: num
       } else if (message.type === 'done') {
         rowCount = message.rowCount ?? message.row_count ?? rowCount;
         elapsedMs = message.elapsedMs ?? message.elapsed_ms ?? elapsedMs;
+      } else if (message.type === 'progress') {
+        onProgress({
+          substep: message.substep,
+          totalSubsteps: message.totalSubsteps ?? message.total_substeps ?? 0,
+          substepName: message.substepName ?? message.substep_name ?? 'Step',
+          percent: message.percent,
+          elapsedMs: message.elapsedMs ?? message.elapsed_ms ?? 0,
+          remainingMs: message.remainingMs ?? message.remaining_ms
+        });
       }
     }
 

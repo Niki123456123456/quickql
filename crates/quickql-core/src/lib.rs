@@ -608,6 +608,18 @@ pub enum StreamMessage<'a> {
         columns: &'a [String],
         source: String,
     },
+    Progress {
+        substep: usize,
+        #[serde(rename = "totalSubsteps")]
+        total_substeps: usize,
+        #[serde(rename = "substepName")]
+        substep_name: &'a str,
+        percent: f64,
+        #[serde(rename = "elapsedMs")]
+        elapsed_ms: f64,
+        #[serde(rename = "remainingMs")]
+        remaining_ms: Option<f64>,
+    },
     Batch {
         start: usize,
         rows: &'a [Value],

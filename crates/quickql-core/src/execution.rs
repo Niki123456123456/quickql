@@ -12,9 +12,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub fn stream_query_jsonl<W: Write>(
     query_path: &Path,
@@ -25,7 +26,7 @@ pub fn stream_query_jsonl<W: Write>(
     let query_text = fs::read_to_string(query_path)
         .with_context(|| format!("Reading query file {}", query_path.display()))?;
     let query = parse_query(&query_text)?;
-    let result = execute_pipeline(&query, query_path)
+    let result = execute_pipeline_streaming(&query, query_path, writer)
         .with_context(|| format!("Executing pipeline {}", query_path.display()))?;
     let columns = columns_from_descriptor(&result.columns);
 
@@ -74,6 +75,159 @@ pub fn stream_query_jsonl<W: Write>(
         &StreamMessage::Done {
             row_count,
             elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+        },
+    )?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn execute_pipeline_streaming<W: Write>(
+    query: &Query,
+    query_path: &Path,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let mut ql_stack = Vec::new();
+    if let Ok(canonical) = fs::canonicalize(query_path) {
+        ql_stack.push(canonical);
+    }
+
+    let mut result = QueryResult::default();
+    let total_substeps = query.steps.len();
+
+    for (index, step) in query.steps.iter().enumerate() {
+        let substep = index + 1;
+        let substep_name = subquery_name(step);
+        let step_start = Instant::now();
+        write_step_progress(
+            writer,
+            substep,
+            total_substeps,
+            substep_name,
+            0.0,
+            step_start,
+        )?;
+
+        result = match step {
+            SubQuery::Source(sources) => load_sources_streaming(
+                query_path,
+                sources,
+                &mut ql_stack,
+                &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
+                writer,
+            )?,
+            SubQuery::Map(map) => apply_map_streaming(
+                result,
+                map,
+                query_path,
+                &mut ql_stack,
+                &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
+                writer,
+            )?,
+            SubQuery::Filter(filter) => apply_filter_streaming(
+                result,
+                filter,
+                query_path,
+                &mut ql_stack,
+                &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
+                writer,
+            )?,
+            SubQuery::MapMany(map_many) => apply_map_many_streaming(
+                result,
+                map_many,
+                &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
+                writer,
+            )?,
+            SubQuery::GroupBy { keys, mapping } => {
+                apply_group_by(result, keys, mapping, query_path, &mut ql_stack)?
+            }
+            SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
+        };
+
+        write_step_progress(
+            writer,
+            substep,
+            total_substeps,
+            substep_name,
+            100.0,
+            step_start,
+        )?;
+    }
+
+    Ok(result)
+}
+
+struct StepProgress<'a> {
+    substep: usize,
+    total_substeps: usize,
+    substep_name: &'a str,
+    started_at: Instant,
+    last_percent: f64,
+}
+
+impl<'a> StepProgress<'a> {
+    fn new(
+        substep: usize,
+        total_substeps: usize,
+        substep_name: &'a str,
+        started_at: Instant,
+    ) -> Self {
+        Self {
+            substep,
+            total_substeps,
+            substep_name,
+            started_at,
+            last_percent: 0.0,
+        }
+    }
+
+    fn update<W: Write>(&mut self, writer: &mut W, completed: usize, total: usize) -> Result<()> {
+        if total == 0 {
+            return Ok(());
+        }
+
+        let percent = ((completed as f64 / total as f64) * 100.0).clamp(0.0, 100.0);
+        if percent < 100.0 && percent < self.last_percent + 1.0 {
+            return Ok(());
+        }
+
+        self.last_percent = percent;
+        write_step_progress(
+            writer,
+            self.substep,
+            self.total_substeps,
+            self.substep_name,
+            percent,
+            self.started_at,
+        )
+    }
+}
+
+fn write_step_progress<W: Write>(
+    writer: &mut W,
+    substep: usize,
+    total_substeps: usize,
+    substep_name: &str,
+    percent: f64,
+    started_at: Instant,
+) -> Result<()> {
+    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+    let remaining_ms = if percent > 0.0 && percent < 100.0 {
+        Some(elapsed_ms * ((100.0 - percent) / percent))
+    } else if percent >= 100.0 {
+        Some(0.0)
+    } else {
+        None
+    };
+
+    write_stream_message(
+        writer,
+        &StreamMessage::Progress {
+            substep,
+            total_substeps,
+            substep_name,
+            percent,
+            elapsed_ms,
+            remaining_ms,
         },
     )?;
     writer.flush()?;
@@ -139,14 +293,6 @@ fn fields_from_sources(query_path: &Path, sources: &[String]) -> Result<Vec<Stri
     Ok(fields)
 }
 
-pub(crate) fn execute_pipeline(query: &Query, query_path: &Path) -> Result<QueryResult> {
-    let mut ql_stack = Vec::new();
-    if let Ok(canonical) = fs::canonicalize(query_path) {
-        ql_stack.push(canonical);
-    }
-    execute_pipeline_with_stack(query, query_path, &mut ql_stack)
-}
-
 fn execute_pipeline_with_stack(
     query: &Query,
     query_path: &Path,
@@ -194,6 +340,41 @@ fn apply_map(
     apply_map_parallel(result, mapping, query_path, ql_stack, parallelism)
 }
 
+fn apply_map_streaming<W: Write>(
+    result: QueryResult,
+    map: &MapStep,
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+    progress: &mut StepProgress<'_>,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let mapping = &map.mapping;
+    if mapping.len() == 1 && matches!(mapping[0], MapExpr::All) {
+        return Ok(result);
+    }
+
+    if let Some(parallelism) = map_parallelism(&map.config, result.rows.len()) {
+        return apply_map_parallel_streaming(
+            result,
+            mapping,
+            query_path,
+            ql_stack,
+            parallelism,
+            progress,
+            writer,
+        );
+    }
+
+    let total = result.rows.len();
+    let mut rows = Vec::with_capacity(total);
+    for (index, row) in result.rows.iter().enumerate() {
+        rows.push(map_row(row, mapping, query_path, ql_stack));
+        progress.update(writer, index + 1, total)?;
+    }
+
+    Ok(QueryResult::new(rows))
+}
+
 fn apply_map_parallel(
     result: QueryResult,
     mapping: &[MapExpr],
@@ -228,6 +409,57 @@ fn apply_map_parallel(
         .collect();
 
     QueryResult::new(rows)
+}
+
+fn apply_map_parallel_streaming<W: Write>(
+    result: QueryResult,
+    mapping: &[MapExpr],
+    query_path: &Path,
+    ql_stack: &[PathBuf],
+    parallelism: usize,
+    progress: &mut StepProgress<'_>,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let row_count = result.rows.len();
+    let completed = AtomicUsize::new(0);
+    let work = Mutex::new(result.rows.into_iter().enumerate().collect::<Vec<_>>());
+    let output = Mutex::new(vec![None; row_count]);
+
+    thread::scope(|scope| {
+        for _ in 0..parallelism {
+            scope.spawn(|| loop {
+                let next = work.lock().unwrap().pop();
+                let Some((index, row)) = next else {
+                    break;
+                };
+
+                let mut ql_stack = ql_stack.to_vec();
+                let mapped = map_row(&row, mapping, query_path, &mut ql_stack);
+                output.lock().unwrap()[index] = Some(mapped);
+                completed.fetch_add(1, AtomicOrdering::Relaxed);
+            });
+        }
+
+        loop {
+            let done = completed.load(AtomicOrdering::Relaxed);
+            progress.update(writer, done, row_count)?;
+            if done >= row_count {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    let rows = output
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.unwrap_or(Value::Null))
+        .collect();
+
+    Ok(QueryResult::new(rows))
 }
 
 fn map_parallelism(config: &Value, row_count: usize) -> Option<usize> {
@@ -280,6 +512,25 @@ fn apply_filter(
     QueryResult::new(rows)
 }
 
+fn apply_filter_streaming<W: Write>(
+    result: QueryResult,
+    filter: &CaluculatedValue,
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+    progress: &mut StepProgress<'_>,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let total = result.rows.len();
+    let mut rows = Vec::new();
+    for (index, row) in result.rows.into_iter().enumerate() {
+        if value_truthy(&filter.caluculate(&row, query_path, ql_stack)) {
+            rows.push(row);
+        }
+        progress.update(writer, index + 1, total)?;
+    }
+    Ok(QueryResult::new(rows))
+}
+
 fn apply_map_many(result: QueryResult, map_many: &MapMany) -> Result<QueryResult> {
     let path = path_parts(&map_many.field);
     let include_paths = map_many
@@ -319,6 +570,52 @@ fn apply_map_many(result: QueryResult, map_many: &MapMany) -> Result<QueryResult
     Ok(QueryResult::new(rows))
 }
 
+fn apply_map_many_streaming<W: Write>(
+    result: QueryResult,
+    map_many: &MapMany,
+    progress: &mut StepProgress<'_>,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let path = path_parts(&map_many.field);
+    let include_paths = map_many
+        .include
+        .iter()
+        .map(|column| (column, path_parts(column)))
+        .collect::<Vec<_>>();
+    let total = result.rows.len();
+    let mut rows = Vec::new();
+
+    for (index, row) in result.rows.into_iter().enumerate() {
+        match get_path(&row, &path) {
+            Value::Array(values) if include_paths.is_empty() => rows.extend(values),
+            Value::Array(values) => {
+                for value in values {
+                    let Value::Object(mut output) = value else {
+                        bail!(
+                            "MAP_MANY column '{}' must contain objects when INCLUDE is used, got {value}",
+                            map_many.field
+                        );
+                    };
+
+                    for (_, include_path) in &include_paths {
+                        set_path(&mut output, include_path, get_path(&row, include_path));
+                    }
+
+                    rows.push(Value::Object(output));
+                }
+            }
+            Value::Null => {}
+            value => bail!(
+                "MAP_MANY column '{}' must be an array, got {value}",
+                map_many.field
+            ),
+        }
+        progress.update(writer, index + 1, total)?;
+    }
+
+    Ok(QueryResult::new(rows))
+}
+
 fn load_sources(
     query_path: &Path,
     sources: &[CaluculatedValue],
@@ -332,6 +629,26 @@ fn load_sources(
         } else {
             rows.push(source);
         }
+    }
+    Ok(QueryResult::new(rows))
+}
+
+fn load_sources_streaming<W: Write>(
+    query_path: &Path,
+    sources: &[CaluculatedValue],
+    ql_stack: &mut Vec<PathBuf>,
+    progress: &mut StepProgress<'_>,
+    writer: &mut W,
+) -> Result<QueryResult> {
+    let mut rows = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let source = source.caluculate(&Value::Null, query_path, ql_stack);
+        if let Value::Array(array) = source {
+            rows.extend(array);
+        } else {
+            rows.push(source);
+        }
+        progress.update(writer, index + 1, sources.len())?;
     }
     Ok(QueryResult::new(rows))
 }
@@ -685,6 +1002,17 @@ fn columns_from_descriptor(descriptor: &KeyDescriptor) -> Vec<String> {
             keys.sort();
             keys
         }
+    }
+}
+
+fn subquery_name(step: &SubQuery) -> &'static str {
+    match step {
+        SubQuery::Source(_) => "Source",
+        SubQuery::Map(_) => "Map",
+        SubQuery::Filter(_) => "Filter",
+        SubQuery::MapMany(_) => "Map many",
+        SubQuery::GroupBy { .. } => "Group by",
+        SubQuery::SortBy(_) => "Sort by",
     }
 }
 

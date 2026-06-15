@@ -3,7 +3,7 @@
   "patterns": [
     {
       "name": "keyword.control.ql",
-      "match": "\\b(?i:SOURCE|MAP|MAP_MANY|FILTER|GROUP_BY|SORT_BY|LIMIT|AND|OR|ASC|DESC|AS|HEADERS|SUM|ARRAY|MINDATE|MAXDATE|COUNT|GETDATE|CONCAT|BASE64)\\b"
+      "match": "\\b(?i:SOURCE|MAP|MAP_MANY|FILTER|GROUP_BY|SORT_BY|INCLUDE)\\b"
     },
     {
       "name": "string.quoted.single.ql",
