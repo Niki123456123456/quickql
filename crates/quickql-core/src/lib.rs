@@ -178,6 +178,7 @@ impl CaluculatedValue {
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
                     "TODAY" => Value::String(Local::now().date_naive().to_string()),
                     "ADDDATE" => add_date_value(values.first(), values.get(1)),
+                    "ISODATE" => iso_date_value(values.first()),
                     "GETDATE" => values
                         .first()
                         .and_then(|value| value.as_str())
@@ -479,6 +480,20 @@ fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn iso_date_value(date: Option<&Value>) -> Value {
+    let Some(date_key) = date
+        .and_then(Value::as_str)
+        .and_then(|date| parse_date_key(date).ok().flatten())
+    else {
+        return Value::Null;
+    };
+
+    let year = date_key / 10_000;
+    let month = (date_key / 100) % 100;
+    let day = date_key % 100;
+    Value::String(format!("{year:04}-{month:02}-{day:02}"))
+}
+
 fn cross_join_value(input: Option<&Value>) -> Value {
     let Some(input) = input.and_then(Value::as_object) else {
         return Value::Null;
@@ -726,5 +741,23 @@ mod tests {
             ),
             Value::Null
         );
+    }
+
+    #[test]
+    fn iso_date_value_maps_dot_separated_date_to_iso_date() {
+        assert_eq!(
+            iso_date_value(Some(&serde_json::json!("24.03.2026"))),
+            serde_json::json!("2026-03-24")
+        );
+    }
+
+    #[test]
+    fn iso_date_value_rejects_invalid_input() {
+        assert_eq!(
+            iso_date_value(Some(&serde_json::json!("31.02.2026"))),
+            Value::Null
+        );
+        assert_eq!(iso_date_value(Some(&serde_json::json!(42))), Value::Null);
+        assert_eq!(iso_date_value(None), Value::Null);
     }
 }

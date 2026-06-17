@@ -99,6 +99,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "MINDATE",
         "MAXDATE",
         "GETDATE",
+        "ISODATE",
         "ADDDATE",
         "TODAY",
         "CROSSJOIN",

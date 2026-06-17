@@ -128,6 +128,19 @@ Input: `"2024-03-15T08:30:00Z"` → Output: `"2024-03-15"`
 
 ---
 
+### ISODATE
+
+Normalizes parseable date strings to ISO date format (`YYYY-MM-DD`). Returns `null` when the input is not a valid date string.
+
+```ql
+SOURCE OPEN('events.json')
+MAP *, date = ISODATE(raw_date)
+```
+
+Input: `"24.03.2026"` → Output: `"2026-03-24"`
+
+---
+
 ## Logic functions
 
 ### EQ

@@ -118,6 +118,7 @@ SORT_BY price DESC, name ASC
 | `AND(a, b, ...)` | `true` if all arguments are truthy |
 | `OR(a, b, ...)` | `true` if any argument is truthy |
 | `GETDATE(field)` | Extract the date part from an ISO datetime string |
+| `ISODATE(field)` | Convert a date like `24.03.2026` to `2026-03-24` |
 | `MINDATE(field)` | Earliest date in a set |
 | `MAXDATE(field)` | Latest date in a set |
 | `BASE64(value)` | Base64-encode a value |
