@@ -122,6 +122,7 @@ SORT_BY price DESC, name ASC
 | `MINDATE(field)` | Earliest date in a set |
 | `MAXDATE(field)` | Latest date in a set |
 | `BASE64(value)` | Base64-encode a value |
+| `OPTICS(matrix, config)` | Run OPTICS cluster analysis over a numeric matrix |
 | `OPEN(src)` / `GET(src)` | Load a file or URL (HTTP GET) |
 | `POST(src)` | HTTP POST |
 | `PUT(src)` | HTTP PUT |

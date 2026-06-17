@@ -105,6 +105,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "CROSSJOIN",
         "CONCAT",
         "BASE64",
+        "OPTICS",
         "UMAP",
     ]
     .into_iter()

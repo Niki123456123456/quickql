@@ -12,6 +12,7 @@ use serde_json::Value;
 mod csv;
 mod execution;
 mod json;
+mod optics;
 mod parsing;
 mod umap;
 
@@ -232,6 +233,7 @@ impl CaluculatedValue {
                         .map(value_to_string)
                         .map(|value| Value::String(BASE64_STANDARD.encode(value)))
                         .unwrap_or(Value::Null),
+                    "OPTICS" => optics::optics_value(values.first(), values.get(1)),
                     "UMAP" => umap::umap_value(values.first(), values.get(1)),
                     _ => Value::Null,
                 }

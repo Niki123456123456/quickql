@@ -141,6 +141,18 @@ Input: `"24.03.2026"` → Output: `"2026-03-24"`
 
 ---
 
+## Analysis functions
+
+### OPTICS
+
+Runs OPTICS cluster analysis over a numeric matrix. Returns samples in the ordering produced by the analysis, with the original row index, cluster index, original embedding, core distance, and reachability distance. Optional config accepts `minPoints` / `min_points`, `tolerance` / `eps` for the OPTICS run, and `clusterTolerance` / `cluster_tolerance` / `clusterEps` / `cluster_eps` for deriving `clusterIndex`.
+
+```ql
+MAP analysis = OPTICS([[0, 0], [0, 0.1], [10, 10]], {minPoints: 2, tolerance: 20, clusterTolerance: 1})
+```
+
+---
+
 ## Logic functions
 
 ### EQ

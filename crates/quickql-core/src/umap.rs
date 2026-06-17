@@ -48,7 +48,7 @@ pub(crate) fn umap_value(data: Option<&Value>, config: Option<&Value>) -> Value 
     )
 }
 
-fn parse_matrix(value: &Value) -> Option<Vec<Vec<f64>>> {
+pub(crate) fn parse_matrix(value: &Value) -> Option<Vec<Vec<f64>>> {
     value
         .as_array()?
         .iter()
@@ -124,13 +124,13 @@ fn get_string(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<
         .map(ToString::to_string)
 }
 
-fn get_usize(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<usize> {
+pub(crate) fn get_usize(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<usize> {
     keys.iter()
         .find_map(|key| config.get(*key).and_then(Value::as_u64))
         .and_then(|value| usize::try_from(value).ok())
 }
 
-fn get_f64(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
+pub(crate) fn get_f64(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
     keys.iter()
         .find_map(|key| config.get(*key).and_then(Value::as_f64))
 }
