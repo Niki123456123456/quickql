@@ -461,14 +461,23 @@ fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
     };
 
     if let Some(range) = index.and_then(Value::as_array) {
-        if range.len() != 2 {
+        let Some(start) = range
+            .first()
+            .and_then(value_to_i64)
+            .and_then(|index| usize::try_from(index).ok())
+        else {
             return Value::Null;
-        }
-        let (Some(start), Some(end)) = (
-            value_to_i64(&range[0]).and_then(|index| usize::try_from(index).ok()),
-            value_to_i64(&range[1]).and_then(|index| usize::try_from(index).ok()),
-        ) else {
-            return Value::Null;
+        };
+        let end = match range.as_slice() {
+            [_] => values.len(),
+            [_, end] => {
+                let Some(end) = value_to_i64(end).and_then(|index| usize::try_from(index).ok())
+                else {
+                    return Value::Null;
+                };
+                end
+            }
+            _ => return Value::Null,
         };
 
         return values
@@ -803,6 +812,17 @@ mod tests {
     }
 
     #[test]
+    fn at_value_returns_array_slice_to_end_for_single_item_range() {
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c", "d", "e"])),
+                Some(&serde_json::json!([2]))
+            ),
+            serde_json::json!(["c", "d", "e"])
+        );
+    }
+
+    #[test]
     fn at_value_rejects_invalid_slice_ranges() {
         assert_eq!(
             at_value(
@@ -822,6 +842,13 @@ mod tests {
             at_value(
                 Some(&serde_json::json!(["a", "b", "c"])),
                 Some(&serde_json::json!([0, 1, 2]))
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!([]))
             ),
             Value::Null
         );
