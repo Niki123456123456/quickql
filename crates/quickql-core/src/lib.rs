@@ -456,16 +456,33 @@ fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
 }
 
 fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
-    let (Some(values), Some(index)) = (
-        input.and_then(Value::as_array),
-        index
-            .and_then(value_to_i64)
-            .and_then(|index| usize::try_from(index).ok()),
-    ) else {
+    let Some(values) = input.and_then(Value::as_array) else {
         return Value::Null;
     };
 
-    values.get(index).cloned().unwrap_or(Value::Null)
+    if let Some(range) = index.and_then(Value::as_array) {
+        if range.len() != 2 {
+            return Value::Null;
+        }
+        let (Some(start), Some(end)) = (
+            value_to_i64(&range[0]).and_then(|index| usize::try_from(index).ok()),
+            value_to_i64(&range[1]).and_then(|index| usize::try_from(index).ok()),
+        ) else {
+            return Value::Null;
+        };
+
+        return values
+            .get(start..end)
+            .map(|values| Value::Array(values.to_vec()))
+            .unwrap_or(Value::Null);
+    }
+
+    index
+        .and_then(value_to_i64)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| values.get(index))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
@@ -761,5 +778,52 @@ mod tests {
         );
         assert_eq!(iso_date_value(Some(&serde_json::json!(42))), Value::Null);
         assert_eq!(iso_date_value(None), Value::Null);
+    }
+
+    #[test]
+    fn at_value_returns_array_item() {
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!(1))
+            ),
+            serde_json::json!("b")
+        );
+    }
+
+    #[test]
+    fn at_value_returns_array_slice_for_range_index() {
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c", "d", "e"])),
+                Some(&serde_json::json!([2, 4]))
+            ),
+            serde_json::json!(["c", "d"])
+        );
+    }
+
+    #[test]
+    fn at_value_rejects_invalid_slice_ranges() {
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!([2, 4]))
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!([2, 1]))
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            at_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!([0, 1, 2]))
+            ),
+            Value::Null
+        );
     }
 }

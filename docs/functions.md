@@ -213,11 +213,12 @@ MAP values = RANGE(2, 0)      -- [2, 1, 0]
 
 ### AT
 
-Returns the item in the first argument array at the zero-based integer index from the second argument. Returns `null` when the first argument is not an array, the index is invalid, or the index is out of range.
+Returns the item in the first argument array at the zero-based integer index from the second argument. When the second argument is a two-item array like `[2, 4]`, returns a slice from the start index up to but excluding the end index. Returns `null` when the first argument is not an array, the index is invalid, or the index is out of range.
 
 ```ql
 MAP first = AT(items, 0)
 MAP second = AT(['a', 'b', 'c'], 1)  -- 'b'
+MAP slice = AT(['a', 'b', 'c', 'd', 'e'], [2, 4])  -- ['c', 'd']
 ```
 
 ---
