@@ -104,6 +104,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "TODAY",
         "CROSSJOIN",
         "CONCAT",
+        "INDEXOF",
         "BASE64",
         "OPTICS",
         "UMAP",

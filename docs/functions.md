@@ -224,6 +224,17 @@ MAP tail = AT(['a', 'b', 'c', 'd', 'e'], [2])  -- ['c', 'd', 'e']
 
 ---
 
+### INDEXOF
+
+Returns the zero-based index of a value in an array. Returns `-1` when the value is not found and `null` when the first argument is not an array.
+
+```ql
+MAP c = INDEXOF(['a', 'b', 'c'], 'c')  -- 2
+MAP missing = INDEXOF(['a', 'b', 'c'], 'd')  -- -1
+```
+
+---
+
 ### ZIPROWS
 
 Converts an object whose fields are arrays into an array of row objects by matching values at the same index. Returns `null` when the input is not an object, any field is not an array, or the arrays have different lengths.

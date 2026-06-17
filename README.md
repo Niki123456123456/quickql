@@ -114,6 +114,7 @@ SORT_BY price DESC, name ASC
 | `COUNT(field)` | Count of values |
 | `ARRAY(a, b, ...)` | Collect values into an array |
 | `CONCAT(a, b, ...)` | Concatenate strings |
+| `INDEXOF(array, value)` | Zero-based index of a value in an array, or `-1` |
 | `EQ(a, b)` | `true` if `a` equals `b` |
 | `AND(a, b, ...)` | `true` if all arguments are truthy |
 | `OR(a, b, ...)` | `true` if any argument is truthy |

@@ -159,6 +159,7 @@ impl CaluculatedValue {
                     "RAND" => random_string_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
                     "AT" => at_value(values.first(), values.get(1)),
+                    "INDEXOF" => index_of_value(values.first(), values.get(1)),
                     "CROSSJOIN" => cross_join_value(values.first()),
                     "ZIPROWS" => zip_rows_value(values.first()),
                     "GET" => CaluculatedValue::Reference(
@@ -492,6 +493,18 @@ fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
         .and_then(|index| values.get(index))
         .cloned()
         .unwrap_or(Value::Null)
+}
+
+fn index_of_value(input: Option<&Value>, needle: Option<&Value>) -> Value {
+    let (Some(values), Some(needle)) = (input.and_then(Value::as_array), needle) else {
+        return Value::Null;
+    };
+
+    values
+        .iter()
+        .position(|value| value == needle)
+        .map(|index| serde_json::json!(index))
+        .unwrap_or_else(|| serde_json::json!(-1))
 }
 
 fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
@@ -850,6 +863,43 @@ mod tests {
                 Some(&serde_json::json!(["a", "b", "c"])),
                 Some(&serde_json::json!([]))
             ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn index_of_value_returns_zero_based_index() {
+        assert_eq!(
+            index_of_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!("c"))
+            ),
+            serde_json::json!(2)
+        );
+    }
+
+    #[test]
+    fn index_of_value_returns_minus_one_when_not_found() {
+        assert_eq!(
+            index_of_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!("d"))
+            ),
+            serde_json::json!(-1)
+        );
+    }
+
+    #[test]
+    fn index_of_value_rejects_invalid_input() {
+        assert_eq!(
+            index_of_value(
+                Some(&serde_json::json!("abc")),
+                Some(&serde_json::json!("b"))
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            index_of_value(Some(&serde_json::json!(["a", "b", "c"])), None),
             Value::Null
         );
     }
