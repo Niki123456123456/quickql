@@ -155,9 +155,16 @@ impl CaluculatedValue {
                     }
                     "ASSIGN" => assign_value(&values),
                     "PARSE" => parse_json_value(values.first()),
+                    "NUMBER" | "TONUMBER" => number_value(values.first()),
+                    "CEIL" => ceil_value(values.first()),
+                    "MIN" => min_value(&values),
+                    "DISTINCT" => distinct_value(&values),
+                    "SORT" => sort_value(&values),
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => len_value(values.first()),
                     "SPLIT" => split_value(values.first(), values.get(1)),
+                    "JOINSTRING" => join_string_value(values.first(), values.get(1)),
+                    "NEWLINE" => Value::String("\n".into()),
                     "RAND" => random_string_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
                     "AT" => at_value(values.first(), values.get(1)),
@@ -352,6 +359,86 @@ fn len_value(value: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn number_value(value: Option<&Value>) -> Value {
+    number_from_value(value)
+        .map(|value| serde_json::json!(value))
+        .unwrap_or(Value::Null)
+}
+
+fn ceil_value(value: Option<&Value>) -> Value {
+    number_from_value(value)
+        .map(|value| serde_json::json!(value.ceil() as i64))
+        .unwrap_or(Value::Null)
+}
+
+fn min_value(values: &[Value]) -> Value {
+    values
+        .iter()
+        .flat_map(flatten_value)
+        .filter_map(|value| number_from_value(Some(value)))
+        .reduce(f64::min)
+        .map(json_number_value)
+        .unwrap_or(Value::Null)
+}
+
+fn distinct_value(values: &[Value]) -> Value {
+    let mut output = Vec::new();
+
+    for value in values.iter().flat_map(flatten_value) {
+        if !output.contains(value) {
+            output.push(value.clone());
+        }
+    }
+
+    Value::Array(output)
+}
+
+fn sort_value(values: &[Value]) -> Value {
+    let mut output: Vec<_> = values.iter().flat_map(flatten_value).cloned().collect();
+    output.sort_by(compare_sort_values);
+    Value::Array(output)
+}
+
+fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
+    match (left.as_f64(), right.as_f64()) {
+        (Some(left), Some(right)) => left
+            .partial_cmp(&right)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        _ => value_to_string(left).cmp(&value_to_string(right)),
+    }
+}
+
+fn number_from_value(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(value)) => value.as_f64().filter(|value| value.is_finite()),
+        Some(Value::String(value)) => {
+            parse_localised_number(value).filter(|value| value.is_finite())
+        }
+        _ => None,
+    }
+}
+
+fn json_number_value(value: f64) -> Value {
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
+}
+
+fn parse_localised_number(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if value.contains(',') && !value.contains('.') {
+        value.replace(',', ".").parse().ok()
+    } else {
+        value.parse().ok()
+    }
+}
+
 fn split_value(input: Option<&Value>, max_part_length: Option<&Value>) -> Value {
     let (Some(input), Some(max_part_length)) = (
         input.and_then(Value::as_str),
@@ -389,6 +476,19 @@ fn split_value(input: Option<&Value>, max_part_length: Option<&Value>) -> Value 
         .collect();
 
     Value::Array(parts)
+}
+
+fn join_string_value(input: Option<&Value>, separator: Option<&Value>) -> Value {
+    let (Some(input), Some(separator)) = (input, separator.and_then(Value::as_str)) else {
+        return Value::Null;
+    };
+
+    Value::String(
+        flatten_value(input)
+            .map(value_to_string)
+            .collect::<Vec<_>>()
+            .join(separator),
+    )
 }
 
 fn assign_value(values: &[Value]) -> Value {
@@ -793,6 +893,135 @@ mod tests {
                 Some(&serde_json::json!(2))
             ),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn join_string_value_joins_array_with_separator() {
+        assert_eq!(
+            join_string_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!("t"))
+            ),
+            serde_json::json!("atbtc")
+        );
+    }
+
+    #[test]
+    fn join_string_value_rejects_invalid_separator() {
+        assert_eq!(
+            join_string_value(
+                Some(&serde_json::json!(["a", "b", "c"])),
+                Some(&serde_json::json!(1))
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn number_value_parses_decimal_comma_string() {
+        assert_eq!(
+            number_value(Some(&serde_json::json!("0,3333"))),
+            serde_json::json!(0.3333)
+        );
+    }
+
+    #[test]
+    fn number_value_keeps_number_values() {
+        assert_eq!(
+            number_value(Some(&serde_json::json!(12.5))),
+            serde_json::json!(12.5)
+        );
+    }
+
+    #[test]
+    fn number_value_rejects_invalid_input() {
+        assert_eq!(number_value(Some(&serde_json::json!("abc"))), Value::Null);
+        assert_eq!(number_value(Some(&serde_json::json!(["0,1"]))), Value::Null);
+    }
+
+    #[test]
+    fn ceil_value_rounds_number_up() {
+        assert_eq!(
+            ceil_value(Some(&serde_json::json!(0.3333))),
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
+    fn ceil_value_rounds_decimal_comma_string_up() {
+        assert_eq!(
+            ceil_value(Some(&serde_json::json!("0,3333"))),
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
+    fn ceil_value_rejects_invalid_input() {
+        assert_eq!(ceil_value(Some(&serde_json::json!("abc"))), Value::Null);
+        assert_eq!(ceil_value(Some(&serde_json::json!(["0,1"]))), Value::Null);
+    }
+
+    #[test]
+    fn min_value_returns_minimum_from_array() {
+        assert_eq!(
+            min_value(&[serde_json::json!([
+                6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+            ])]),
+            serde_json::json!(6)
+        );
+    }
+
+    #[test]
+    fn min_value_returns_minimum_from_multiple_values() {
+        assert_eq!(
+            min_value(&[
+                serde_json::json!(8),
+                serde_json::json!("0,3333"),
+                serde_json::json!(1)
+            ]),
+            serde_json::json!(0.3333)
+        );
+    }
+
+    #[test]
+    fn min_value_rejects_input_without_numbers() {
+        assert_eq!(min_value(&[serde_json::json!(["abc"])]), Value::Null);
+    }
+
+    #[test]
+    fn distinct_value_removes_duplicates_from_array() {
+        assert_eq!(
+            distinct_value(&[serde_json::json!(["a", "c", "b", "c"])]),
+            serde_json::json!(["a", "c", "b"])
+        );
+    }
+
+    #[test]
+    fn distinct_value_removes_duplicates_from_multiple_values() {
+        assert_eq!(
+            distinct_value(&[
+                serde_json::json!(["a", "c"]),
+                serde_json::json!("b"),
+                serde_json::json!("c")
+            ]),
+            serde_json::json!(["a", "c", "b"])
+        );
+    }
+
+    #[test]
+    fn sort_value_sorts_string_array() {
+        assert_eq!(
+            sort_value(&[serde_json::json!(["a", "c", "b"])]),
+            serde_json::json!(["a", "b", "c"])
+        );
+    }
+
+    #[test]
+    fn sort_value_sorts_numbers_numerically() {
+        assert_eq!(
+            sort_value(&[serde_json::json!([10, 2, 1])]),
+            serde_json::json!([1, 2, 10])
         );
     }
 
