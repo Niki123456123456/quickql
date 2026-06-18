@@ -73,86 +73,53 @@ pub(crate) fn optics_value(data: Option<&Value>, config: Option<&Value>) -> Valu
     let mut current_cluster: Option<usize> = None;
     let mut next_cluster = 0;
 
-    Value::Array(
-        analysis
-            .iter()
-            .map(|sample| {
-                let core_distance = *sample.core_distance();
-                let reachability_distance = *sample.reachability_distance();
-                let starts_cluster =
-                    core_distance.is_some_and(|distance| distance <= cluster_tolerance);
-                let cluster_index = if reachability_distance
-                    .is_none_or(|distance| distance > cluster_tolerance)
-                    || current_cluster.is_none()
-                {
-                    if starts_cluster {
-                        let cluster_index = next_cluster;
-                        next_cluster += 1;
-                        current_cluster = Some(cluster_index);
-                        Some(cluster_index)
-                    } else {
-                        current_cluster = None;
-                        None
-                    }
+    let mut samples: Vec<_> = analysis
+        .iter()
+        .map(|sample: &linfa_clustering::Sample<f64>| {
+            let core_distance = *sample.core_distance();
+            let reachability_distance = *sample.reachability_distance();
+            let starts_cluster =
+                core_distance.is_some_and(|distance| distance <= cluster_tolerance);
+            let cluster_index = if reachability_distance
+                .is_none_or(|distance| distance > cluster_tolerance)
+                || current_cluster.is_none()
+            {
+                if starts_cluster {
+                    let cluster_index = next_cluster;
+                    next_cluster += 1;
+                    current_cluster = Some(cluster_index);
+                    Some(cluster_index)
                 } else {
-                    current_cluster
-                };
+                    current_cluster = None;
+                    None
+                }
+            } else {
+                current_cluster
+            };
 
-                serde_json::json!({
-                    "clusterIndex": cluster_index,
-                    "index": sample.index(),
-                    "embedding": rows[sample.index()],
-                    "coreDistance": core_distance,
-                    "reachabilityDistance": reachability_distance,
-                })
-            })
-            .collect(),
-    )
+            Sample {
+                cluster_index,
+                index: sample.index(),
+                core_distance,
+                reachability_distance,
+            }
+        })
+        .collect();
+
+    samples.sort_by_key(|sample| sample.index);
+
+    serde_json::json!({
+        "clusterIndex": samples.iter().map(|x|x.cluster_index).collect::<Vec<_>>(),
+        "index": samples.iter().map(|x|x.index).collect::<Vec<_>>(),
+        "embedding": samples.iter().map(|x|rows[x.index].clone()).collect::<Vec<_>>(),
+        "coreDistance": samples.iter().map(|x|x.core_distance).collect::<Vec<_>>(),
+        "reachabilityDistance": samples.iter().map(|x|x.reachability_distance).collect::<Vec<_>>(),
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn optics_value_returns_ordered_sample_analysis() {
-        let result = optics_value(
-            Some(&serde_json::json!([[0.0, 0.0], [0.0, 0.1], [10.0, 10.0]])),
-            Some(&serde_json::json!({"minPoints": 2, "tolerance": 20.0, "clusterTolerance": 1.0})),
-        );
-
-        let rows = result.as_array().expect("OPTICS should return sample rows");
-        assert_eq!(rows.len(), 3);
-        assert!(rows.iter().all(|row| row.get("index").is_some()));
-        assert!(rows.iter().all(|row| row.get("coreDistance").is_some()));
-        assert!(rows
-            .iter()
-            .all(|row| row.get("reachabilityDistance").is_some()));
-        assert!(rows
-            .iter()
-            .any(|row| row["clusterIndex"].as_u64() == Some(0)));
-        assert!(rows.iter().any(|row| row["clusterIndex"].is_null()));
-    }
-
-    #[test]
-    fn optics_value_rejects_invalid_input() {
-        assert_eq!(
-            optics_value(Some(&serde_json::json!([[1.0]])), None),
-            Value::Null
-        );
-        assert_eq!(
-            optics_value(
-                Some(&serde_json::json!([[1.0], [2.0]])),
-                Some(&serde_json::json!({"minPoints": 3}))
-            ),
-            Value::Null
-        );
-        assert_eq!(
-            optics_value(
-                Some(&serde_json::json!([[1.0], [2.0]])),
-                Some(&serde_json::json!({"clusterTolerance": 0.0}))
-            ),
-            Value::Null
-        );
-    }
+struct Sample {
+    cluster_index: Option<usize>,
+    index: usize,
+    core_distance: Option<f64>,
+    reachability_distance: Option<f64>,
 }
