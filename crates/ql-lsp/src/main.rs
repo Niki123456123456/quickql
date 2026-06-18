@@ -106,6 +106,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "CONCAT",
         "INDEXOF",
         "BASE64",
+        "COLOR",
         "OPTICS",
         "UMAP",
     ]

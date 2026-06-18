@@ -9,6 +9,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 use serde_json::Value;
 
+mod color;
 mod csv;
 mod execution;
 mod json;
@@ -234,6 +235,7 @@ impl CaluculatedValue {
                         .map(value_to_string)
                         .map(|value| Value::String(BASE64_STANDARD.encode(value)))
                         .unwrap_or(Value::Null),
+                    "COLOR" => color_value(values.first()),
                     "OPTICS" => optics::optics_value(values.first(), values.get(1)),
                     "UMAP" => umap::umap_value(values.first(), values.get(1)),
                     _ => Value::Null,
@@ -331,6 +333,14 @@ fn value_to_string(value: &Value) -> String {
         Value::Null => String::new(),
         value => value.to_string(),
     }
+}
+
+fn color_value(index: Option<&Value>) -> Value {
+    index
+        .and_then(Value::as_u64)
+        .map(color::get_color)
+        .map(Value::String)
+        .unwrap_or(Value::Null)
 }
 
 fn len_value(value: Option<&Value>) -> Value {
@@ -902,5 +912,24 @@ mod tests {
             index_of_value(Some(&serde_json::json!(["a", "b", "c"])), None),
             Value::Null
         );
+    }
+
+    #[test]
+    fn color_value_returns_deterministic_rgb_color() {
+        assert_eq!(
+            color_value(Some(&serde_json::json!(0))),
+            serde_json::json!("rgb(51, 255, 255)")
+        );
+        assert_eq!(
+            color_value(Some(&serde_json::json!(1))),
+            serde_json::json!("rgb(153, 255, 51)")
+        );
+    }
+
+    #[test]
+    fn color_value_rejects_invalid_input() {
+        assert_eq!(color_value(Some(&serde_json::json!(-1))), Value::Null);
+        assert_eq!(color_value(Some(&serde_json::json!("1"))), Value::Null);
+        assert_eq!(color_value(None), Value::Null);
     }
 }

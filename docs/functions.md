@@ -93,6 +93,17 @@ MAP id, encoded = BASE64(secret)
 
 ---
 
+### COLOR
+
+Returns a deterministic RGB color string for a zero-based integer index.
+
+```ql
+MAP *, color = COLOR(INDEXOF(categories, category))
+-- "rgb(51, 255, 255)"
+```
+
+---
+
 ### SPLIT
 
 Splits a string into equal parts with the given maximum part length. Returns `null` when the first argument is not a string or the length is not a positive integer.
