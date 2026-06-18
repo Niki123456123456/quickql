@@ -118,7 +118,7 @@ fn params_from_config(
     params
 }
 
-fn get_string(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+pub(crate) fn get_string(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| config.get(*key).and_then(Value::as_str))
         .map(ToString::to_string)
@@ -135,7 +135,7 @@ pub(crate) fn get_f64(config: &serde_json::Map<String, Value>, keys: &[&str]) ->
         .find_map(|key| config.get(*key).and_then(Value::as_f64))
 }
 
-fn get_bool(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<bool> {
+pub(crate) fn get_bool(config: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<bool> {
     keys.iter()
         .find_map(|key| config.get(*key).and_then(Value::as_bool))
 }

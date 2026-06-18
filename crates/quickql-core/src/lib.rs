@@ -15,6 +15,7 @@ mod execution;
 mod json;
 mod optics;
 mod parsing;
+mod tsne;
 mod umap;
 
 pub use execution::{
@@ -237,6 +238,7 @@ impl CaluculatedValue {
                         .unwrap_or(Value::Null),
                     "COLOR" => color_value(values.first()),
                     "OPTICS" => optics::optics_value(values.first(), values.get(1)),
+                    "TSNE" => tsne::tsne_value(values.first(), values.get(1)),
                     "UMAP" => umap::umap_value(values.first(), values.get(1)),
                     _ => Value::Null,
                 }
