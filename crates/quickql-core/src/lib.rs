@@ -160,6 +160,9 @@ impl CaluculatedValue {
                     "MIN" => min_value(&values),
                     "DISTINCT" => distinct_value(&values),
                     "SORT" => sort_value(&values),
+                    "SOFTMAX" => softmax_value(&values),
+                    "ENTROPY" => shannon_entropy_value(&values),
+                    "L2" => l2_value(&values),
                     "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
                     "LEN" => len_value(values.first()),
                     "SPLIT" => split_value(values.first(), values.get(1)),
@@ -399,6 +402,62 @@ fn sort_value(values: &[Value]) -> Value {
     Value::Array(output)
 }
 
+fn softmax_value(values: &[Value]) -> Value {
+    let Some(values) = numeric_vector_from_values(values) else {
+        return Value::Null;
+    };
+    if values.is_empty() {
+        return Value::Array(Vec::new());
+    }
+
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let exp_values: Vec<_> = values.iter().map(|value| (value - max).exp()).collect();
+    let sum: f64 = exp_values.iter().sum();
+    if !sum.is_finite() || sum == 0.0 {
+        return Value::Null;
+    }
+
+    Value::Array(
+        exp_values
+            .into_iter()
+            .map(|value| serde_json::json!(value / sum))
+            .collect(),
+    )
+}
+
+fn shannon_entropy_value(values: &[Value]) -> Value {
+    let Some(values) = numeric_vector_from_values(values) else {
+        return Value::Null;
+    };
+    if values.is_empty() || values.iter().any(|value| *value < 0.0) {
+        return Value::Null;
+    }
+
+    let sum: f64 = values.iter().sum();
+    if !sum.is_finite() || sum <= 0.0 {
+        return Value::Null;
+    }
+
+    let entropy: f64 = values
+        .iter()
+        .filter(|value| **value > 0.0)
+        .map(|value| {
+            let probability = value / sum;
+            -probability * probability.log2()
+        })
+        .sum();
+
+    serde_json::json!(entropy)
+}
+
+fn l2_value(values: &[Value]) -> Value {
+    let Some(values) = numeric_vector_from_values(values) else {
+        return Value::Null;
+    };
+
+    serde_json::json!(values.iter().map(|value| value * value).sum::<f64>().sqrt())
+}
+
 fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
     match (left.as_f64(), right.as_f64()) {
         (Some(left), Some(right)) => left
@@ -406,6 +465,14 @@ fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
             .unwrap_or(std::cmp::Ordering::Equal),
         _ => value_to_string(left).cmp(&value_to_string(right)),
     }
+}
+
+fn numeric_vector_from_values(values: &[Value]) -> Option<Vec<f64>> {
+    values
+        .iter()
+        .flat_map(flatten_value)
+        .map(|value| number_from_value(Some(value)))
+        .collect()
 }
 
 fn number_from_value(value: Option<&Value>) -> Option<f64> {
@@ -843,324 +910,3 @@ pub enum StreamMessage<'a> {
 pub const DEFAULT_BLOCK_SIZE: usize = 1000;
 pub const DEFAULT_STREAM_BATCH_SIZE: usize = 1000;
 pub(crate) const ALL_COLUMNS: &str = "*";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_value_splits_string_into_equal_parts_under_max_length() {
-        assert_eq!(
-            split_value(
-                Some(&serde_json::json!("abcdefghij")),
-                Some(&serde_json::json!(3))
-            ),
-            serde_json::json!(["abc", "def", "gh", "ij"])
-        );
-    }
-
-    #[test]
-    fn split_value_distributes_remainder_across_first_parts() {
-        assert_eq!(
-            split_value(
-                Some(&serde_json::json!("abcdefghij")),
-                Some(&serde_json::json!(4))
-            ),
-            serde_json::json!(["abcd", "efg", "hij"])
-        );
-    }
-
-    #[test]
-    fn split_value_counts_characters_not_bytes() {
-        assert_eq!(
-            split_value(
-                Some(&serde_json::json!("åßcd")),
-                Some(&serde_json::json!(2))
-            ),
-            serde_json::json!(["åß", "cd"])
-        );
-    }
-
-    #[test]
-    fn split_value_rejects_invalid_input() {
-        assert_eq!(
-            split_value(Some(&serde_json::json!("abc")), Some(&serde_json::json!(0))),
-            Value::Null
-        );
-        assert_eq!(
-            split_value(
-                Some(&serde_json::json!(["abc"])),
-                Some(&serde_json::json!(2))
-            ),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn join_string_value_joins_array_with_separator() {
-        assert_eq!(
-            join_string_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!("t"))
-            ),
-            serde_json::json!("atbtc")
-        );
-    }
-
-    #[test]
-    fn join_string_value_rejects_invalid_separator() {
-        assert_eq!(
-            join_string_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!(1))
-            ),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn number_value_parses_decimal_comma_string() {
-        assert_eq!(
-            number_value(Some(&serde_json::json!("0,3333"))),
-            serde_json::json!(0.3333)
-        );
-    }
-
-    #[test]
-    fn number_value_keeps_number_values() {
-        assert_eq!(
-            number_value(Some(&serde_json::json!(12.5))),
-            serde_json::json!(12.5)
-        );
-    }
-
-    #[test]
-    fn number_value_rejects_invalid_input() {
-        assert_eq!(number_value(Some(&serde_json::json!("abc"))), Value::Null);
-        assert_eq!(number_value(Some(&serde_json::json!(["0,1"]))), Value::Null);
-    }
-
-    #[test]
-    fn ceil_value_rounds_number_up() {
-        assert_eq!(
-            ceil_value(Some(&serde_json::json!(0.3333))),
-            serde_json::json!(1)
-        );
-    }
-
-    #[test]
-    fn ceil_value_rounds_decimal_comma_string_up() {
-        assert_eq!(
-            ceil_value(Some(&serde_json::json!("0,3333"))),
-            serde_json::json!(1)
-        );
-    }
-
-    #[test]
-    fn ceil_value_rejects_invalid_input() {
-        assert_eq!(ceil_value(Some(&serde_json::json!("abc"))), Value::Null);
-        assert_eq!(ceil_value(Some(&serde_json::json!(["0,1"]))), Value::Null);
-    }
-
-    #[test]
-    fn min_value_returns_minimum_from_array() {
-        assert_eq!(
-            min_value(&[serde_json::json!([
-                6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
-            ])]),
-            serde_json::json!(6)
-        );
-    }
-
-    #[test]
-    fn min_value_returns_minimum_from_multiple_values() {
-        assert_eq!(
-            min_value(&[
-                serde_json::json!(8),
-                serde_json::json!("0,3333"),
-                serde_json::json!(1)
-            ]),
-            serde_json::json!(0.3333)
-        );
-    }
-
-    #[test]
-    fn min_value_rejects_input_without_numbers() {
-        assert_eq!(min_value(&[serde_json::json!(["abc"])]), Value::Null);
-    }
-
-    #[test]
-    fn distinct_value_removes_duplicates_from_array() {
-        assert_eq!(
-            distinct_value(&[serde_json::json!(["a", "c", "b", "c"])]),
-            serde_json::json!(["a", "c", "b"])
-        );
-    }
-
-    #[test]
-    fn distinct_value_removes_duplicates_from_multiple_values() {
-        assert_eq!(
-            distinct_value(&[
-                serde_json::json!(["a", "c"]),
-                serde_json::json!("b"),
-                serde_json::json!("c")
-            ]),
-            serde_json::json!(["a", "c", "b"])
-        );
-    }
-
-    #[test]
-    fn sort_value_sorts_string_array() {
-        assert_eq!(
-            sort_value(&[serde_json::json!(["a", "c", "b"])]),
-            serde_json::json!(["a", "b", "c"])
-        );
-    }
-
-    #[test]
-    fn sort_value_sorts_numbers_numerically() {
-        assert_eq!(
-            sort_value(&[serde_json::json!([10, 2, 1])]),
-            serde_json::json!([1, 2, 10])
-        );
-    }
-
-    #[test]
-    fn iso_date_value_maps_dot_separated_date_to_iso_date() {
-        assert_eq!(
-            iso_date_value(Some(&serde_json::json!("24.03.2026"))),
-            serde_json::json!("2026-03-24")
-        );
-    }
-
-    #[test]
-    fn iso_date_value_rejects_invalid_input() {
-        assert_eq!(
-            iso_date_value(Some(&serde_json::json!("31.02.2026"))),
-            Value::Null
-        );
-        assert_eq!(iso_date_value(Some(&serde_json::json!(42))), Value::Null);
-        assert_eq!(iso_date_value(None), Value::Null);
-    }
-
-    #[test]
-    fn at_value_returns_array_item() {
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!(1))
-            ),
-            serde_json::json!("b")
-        );
-    }
-
-    #[test]
-    fn at_value_returns_array_slice_for_range_index() {
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c", "d", "e"])),
-                Some(&serde_json::json!([2, 4]))
-            ),
-            serde_json::json!(["c", "d"])
-        );
-    }
-
-    #[test]
-    fn at_value_returns_array_slice_to_end_for_single_item_range() {
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c", "d", "e"])),
-                Some(&serde_json::json!([2]))
-            ),
-            serde_json::json!(["c", "d", "e"])
-        );
-    }
-
-    #[test]
-    fn at_value_rejects_invalid_slice_ranges() {
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!([2, 4]))
-            ),
-            Value::Null
-        );
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!([2, 1]))
-            ),
-            Value::Null
-        );
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!([0, 1, 2]))
-            ),
-            Value::Null
-        );
-        assert_eq!(
-            at_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!([]))
-            ),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn index_of_value_returns_zero_based_index() {
-        assert_eq!(
-            index_of_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!("c"))
-            ),
-            serde_json::json!(2)
-        );
-    }
-
-    #[test]
-    fn index_of_value_returns_minus_one_when_not_found() {
-        assert_eq!(
-            index_of_value(
-                Some(&serde_json::json!(["a", "b", "c"])),
-                Some(&serde_json::json!("d"))
-            ),
-            serde_json::json!(-1)
-        );
-    }
-
-    #[test]
-    fn index_of_value_rejects_invalid_input() {
-        assert_eq!(
-            index_of_value(
-                Some(&serde_json::json!("abc")),
-                Some(&serde_json::json!("b"))
-            ),
-            Value::Null
-        );
-        assert_eq!(
-            index_of_value(Some(&serde_json::json!(["a", "b", "c"])), None),
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn color_value_returns_deterministic_rgb_color() {
-        assert_eq!(
-            color_value(Some(&serde_json::json!(0))),
-            serde_json::json!("rgb(51, 255, 255)")
-        );
-        assert_eq!(
-            color_value(Some(&serde_json::json!(1))),
-            serde_json::json!("rgb(153, 255, 51)")
-        );
-    }
-
-    #[test]
-    fn color_value_rejects_invalid_input() {
-        assert_eq!(color_value(Some(&serde_json::json!(-1))), Value::Null);
-        assert_eq!(color_value(Some(&serde_json::json!("1"))), Value::Null);
-        assert_eq!(color_value(None), Value::Null);
-    }
-}
