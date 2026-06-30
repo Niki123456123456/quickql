@@ -141,4 +141,3 @@ fn normalise_approx_type(approx_type: &str) -> Option<String> {
         _ => None,
     }
 }
-

@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, Ident, ItemFn, Lit, Meta, Pat, ReturnType,
-    Token, Type,
+    parse_macro_input, punctuated::Punctuated, FnArg, GenericArgument, Ident, ItemFn, Lit, Meta,
+    Pat, PathArguments, ReturnType, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -21,27 +21,41 @@ fn expand_fn_info(
 ) -> syn::Result<TokenStream2> {
     let fn_name = &function.sig.ident;
     let info_name = format_ident!("{fn_name}_info");
-    let function_name = function_info_name(&args)?.unwrap_or_else(|| fn_name.to_string());
+    let function_name =
+        function_info_name(&args)?.unwrap_or_else(|| default_function_name(fn_name));
 
     let mut params = Vec::new();
     let mut extract_args = Vec::new();
     let mut call_args = Vec::new();
     let mut min_params = 0usize;
-    let input_count = function.sig.inputs.len();
+    let function_inputs: Vec<_> = function
+        .sig
+        .inputs
+        .iter()
+        .map(|arg| match arg {
+            FnArg::Typed(arg) => Ok(arg),
+            FnArg::Receiver(_) => Err(syn::Error::new_spanned(
+                arg,
+                "fn_info does not support methods",
+            )),
+        })
+        .collect::<syn::Result<_>>()?;
+    let query_inputs: Vec<_> = function_inputs
+        .iter()
+        .copied()
+        .filter(|arg| !is_meta_parameters(&arg.ty))
+        .collect();
+    let input_count = query_inputs.len();
     let variadic = input_count == 1
         && function
             .sig
             .inputs
             .iter()
-            .all(|arg| matches!(arg, FnArg::Typed(arg) if is_value_slice(&arg.ty) || is_value_vec_ref(&arg.ty)));
+            .all(|arg| matches!(arg, FnArg::Typed(arg) if is_meta_parameters(&arg.ty) || is_value_slice(&arg.ty) || is_value_vec_ref(&arg.ty)));
 
-    for (index, arg) in function.sig.inputs.iter().enumerate() {
-        let FnArg::Typed(arg) = arg else {
-            return Err(syn::Error::new_spanned(
-                arg,
-                "fn_info does not support methods",
-            ));
-        };
+    let mut meta_parameters_seen = false;
+    let mut query_index = 0usize;
+    for arg in function_inputs {
         let Pat::Ident(pat) = arg.pat.as_ref() else {
             return Err(syn::Error::new_spanned(
                 &arg.pat,
@@ -50,13 +64,27 @@ fn expand_fn_info(
         };
 
         let ident = &pat.ident;
+        if is_meta_parameters(&arg.ty) {
+            if meta_parameters_seen {
+                return Err(syn::Error::new_spanned(
+                    &arg.ty,
+                    "fn_info only supports one MetaParameters parameter",
+                ));
+            }
+            meta_parameters_seen = true;
+            call_args.push(quote! { metaparams });
+            continue;
+        }
+
         let name = ident.to_string();
         let type_info = type_info_expr(&arg.ty)?;
-        let extraction = extraction_expr(index, input_count, ident, &arg.ty)?;
+        let extraction = extraction_expr(query_index, input_count, ident, &arg.ty)?;
+        let call_arg = call_arg_expr(ident, &arg.ty);
 
         if !is_option_value_ref(&arg.ty) && !is_option_usize(&arg.ty) {
-            min_params = index + 1;
+            min_params = query_index + 1;
         }
+        query_index += 1;
 
         params.push(quote! {
             ParamInfo {
@@ -65,7 +93,7 @@ fn expand_fn_info(
             }
         });
         extract_args.push(extraction);
-        call_args.push(quote! { #ident });
+        call_args.push(call_arg);
     }
 
     let return_type = return_type_expr(&function.sig.output)?;
@@ -80,7 +108,7 @@ fn expand_fn_info(
                 min_params: #min_params,
                 variadic: #variadic,
                 return_type: #return_type,
-                function: Box::new(|params: &[Value]| {
+                function: Box::new(|params: &[Value], metaparams| {
                     #(#extract_args)*
                     #return_value
                 }),
@@ -126,6 +154,10 @@ fn function_info_name(args: &Punctuated<Meta, Token![,]>) -> syn::Result<Option<
     Ok(name)
 }
 
+fn default_function_name(ident: &Ident) -> String {
+    ident.to_string().trim_start_matches("r#").to_string()
+}
+
 fn type_info_expr(ty: &Type) -> syn::Result<TokenStream2> {
     json_type_info_expr(ty).ok_or_else(|| {
         syn::Error::new_spanned(
@@ -144,12 +176,20 @@ fn json_type_info_expr(ty: &Type) -> Option<TokenStream2> {
         Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
     } else if is_value_vec(ty) {
         Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
+    } else if is_f64_vec(ty) || is_f64_vec_ref(ty) {
+        Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Number.into()) })
     } else if is_usize(ty) || is_i64(ty) || is_f64(ty) {
         Some(quote! { JsonTypeInfo::Number })
     } else if is_bool(ty) {
         Some(quote! { JsonTypeInfo::Bool })
-    } else if is_option_usize(ty) {
+    } else if is_option_usize(ty) || is_option_f64(ty) {
         Some(quote! { JsonTypeInfo::OneOf(vec![JsonTypeInfo::Number, JsonTypeInfo::Null]) })
+    } else if let Some((left, right)) = one_of_types(ty) {
+        let left = json_type_info_expr(left).unwrap_or_else(|| quote! { JsonTypeInfo::Any });
+        let right = json_type_info_expr(right).unwrap_or_else(|| quote! { JsonTypeInfo::Any });
+        Some(quote! { JsonTypeInfo::OneOf(vec![#left, #right]) })
+    } else if is_deserializable_type(ty) {
+        Some(quote! { JsonTypeInfo::Any })
     } else {
         None
     }
@@ -189,6 +229,22 @@ fn extraction_expr(
                 return Value::Null;
             };
         })
+    } else if is_string(ty) {
+        Ok(quote! {
+            let Some(#ident) = params.get(#index).and_then(Value::as_str).map(ToString::to_string) else {
+                return Value::Null;
+            };
+        })
+    } else if is_f64_vec(ty) || is_f64_vec_ref(ty) {
+        Ok(quote! {
+            let Some(#ident) = params
+                .get(#index)
+                .and_then(Value::as_array)
+                .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+            else {
+                return Value::Null;
+            };
+        })
     } else if is_usize(ty) {
         Ok(quote! {
             let Some(#ident) = params
@@ -211,11 +267,47 @@ fn extraction_expr(
                 return Value::Null;
             };
         })
+    } else if is_bool(ty) {
+        Ok(quote! {
+            let Some(#ident) = params.get(#index).and_then(Value::as_bool) else {
+                return Value::Null;
+            };
+        })
+    } else if let Some((left, right)) = one_of_types(ty) {
+        Ok(quote! {
+            let Some(value) = params.get(#index) else {
+                return Value::Null;
+            };
+            let #ident = if let Ok(value) = serde_json::from_value::<#left>(value.clone()) {
+                OneOf::A(value)
+            } else if let Ok(value) = serde_json::from_value::<#right>(value.clone()) {
+                OneOf::B(value)
+            } else {
+                return Value::Null;
+            };
+        })
+    } else if is_deserializable_type(ty) {
+        Ok(quote! {
+            let Some(#ident) = params
+                .get(#index)
+                .and_then(|value| serde_json::from_value::<#ty>(value.clone()).ok())
+            else {
+                return Value::Null;
+            };
+        })
     } else {
         Err(syn::Error::new_spanned(
             ty,
             format!("unsupported fn_info parameter type `{}`", type_text(ty)),
         ))
+    }
+}
+
+fn call_arg_expr(ident: &Ident, ty: &Type) -> TokenStream2 {
+    if is_f64_vec_ref(ty) {
+        quote! { &#ident }
+    } else {
+        quote! { #ident }
     }
 }
 
@@ -250,13 +342,16 @@ fn return_value_expr(
         ReturnType::Type(_, ty) if is_value_vec(ty) => Ok(quote! {
             Value::Array(#fn_name(#(#call_args),*))
         }),
+        ReturnType::Type(_, ty) if is_f64_vec(ty) => Ok(quote! {
+            serde_json::json!(#fn_name(#(#call_args),*))
+        }),
         ReturnType::Type(_, ty) if is_usize(ty) || is_i64(ty) || is_f64(ty) => Ok(quote! {
             serde_json::json!(#fn_name(#(#call_args),*))
         }),
         ReturnType::Type(_, ty) if is_bool(ty) => Ok(quote! {
             Value::Bool(#fn_name(#(#call_args),*))
         }),
-        ReturnType::Type(_, ty) if is_option_usize(ty) => Ok(quote! {
+        ReturnType::Type(_, ty) if is_option_usize(ty) || is_option_f64(ty) => Ok(quote! {
             #fn_name(#(#call_args),*)
                 .map(|value| serde_json::json!(value))
                 .unwrap_or(Value::Null)
@@ -296,12 +391,24 @@ fn is_value_vec(ty: &Type) -> bool {
     normalized_type_text(ty) == "Vec<Value>"
 }
 
+fn is_f64_vec_ref(ty: &Type) -> bool {
+    normalized_type_text(ty) == "&Vec<f64>"
+}
+
+fn is_f64_vec(ty: &Type) -> bool {
+    normalized_type_text(ty) == "Vec<f64>"
+}
+
 fn is_option_value_ref(ty: &Type) -> bool {
     normalized_type_text(ty) == "Option<&Value>"
 }
 
 fn is_option_usize(ty: &Type) -> bool {
     normalized_type_text(ty) == "Option<usize>"
+}
+
+fn is_option_f64(ty: &Type) -> bool {
+    normalized_type_text(ty) == "Option<f64>"
 }
 
 fn is_usize(ty: &Type) -> bool {
@@ -318,6 +425,43 @@ fn is_f64(ty: &Type) -> bool {
 
 fn is_bool(ty: &Type) -> bool {
     normalized_type_text(ty) == "bool"
+}
+
+fn is_meta_parameters(ty: &Type) -> bool {
+    normalized_type_text(ty) == "MetaParameters"
+}
+
+fn one_of_types(ty: &Type) -> Option<(&Type, &Type)> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "OneOf" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    if args.args.len() != 2 {
+        return None;
+    }
+    let mut args = args.args.iter();
+    let GenericArgument::Type(left) = args.next()? else {
+        return None;
+    };
+    let GenericArgument::Type(right) = args.next()? else {
+        return None;
+    };
+    Some((left, right))
+}
+
+fn is_deserializable_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    type_path.qself.is_none()
+        && type_path.path.leading_colon.is_none()
+        && type_path.path.segments.len() == 1
 }
 
 fn normalized_type_text(ty: &Type) -> String {
