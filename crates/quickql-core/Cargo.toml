@@ -16,6 +16,7 @@ manifolds-rs.workspace = true
 ndarray.workspace = true
 pest.workspace = true
 pest_derive.workspace = true
+quickql-macros = { path = "../quickql-macros" }
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

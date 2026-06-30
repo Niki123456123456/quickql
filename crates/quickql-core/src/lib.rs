@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use chrono::{Duration, Local, NaiveDate};
+use quickql_macros::fn_info;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 use serde_json::Value;
@@ -139,6 +141,10 @@ impl CaluculatedValue {
                     .iter()
                     .map(|x| x.caluculate(value, query_path, ql_stack))
                     .collect();
+                if let Some(function_info) = fn_info_for_call(function, &values) {
+                    return (function_info.function)(&values);
+                }
+
                 match function.to_ascii_uppercase().as_str() {
                     "SUM" => {
                         let sum: f64 = values
@@ -173,11 +179,9 @@ impl CaluculatedValue {
                     "LEN" => len_value(values.first()),
                     "SPLIT" => split_value(values.first(), values.get(1)),
                     "JOINSTRING" => join_string_value(values.first(), values.get(1)),
-                    "NEWLINE" => Value::String("\n".into()),
                     "RAND" => random_string_value(values.first()),
                     "RANGE" => range_value(values.first(), values.get(1)),
                     "AT" => at_value(values.first(), values.get(1)),
-                    "INDEXOF" => index_of_value(values.first(), values.get(1)),
                     "CROSSJOIN" => cross_join_value(values.first()),
                     "ZIPROWS" => zip_rows_value(values.first()),
                     "GET" => CaluculatedValue::Reference(
@@ -196,7 +200,6 @@ impl CaluculatedValue {
                     "EQ" => Value::Bool(values.first() == values.get(1)),
                     "OR" => Value::Bool(values.iter().any(value_truthy)),
                     "AND" => Value::Bool(values.iter().all(value_truthy)),
-                    "TODAY" => Value::String(Local::now().date_naive().to_string()),
                     "ADDDATE" => add_date_value(values.first(), values.get(1)),
                     "ISODATE" => iso_date_value(values.first()),
                     "GETDATE" => values
@@ -680,16 +683,66 @@ fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn index_of_value(input: Option<&Value>, needle: Option<&Value>) -> Value {
-    let (Some(values), Some(needle)) = (input.and_then(Value::as_array), needle) else {
-        return Value::Null;
-    };
+#[fn_info]
+fn index_of(values: &[Value], needle: &Value) -> Option<usize> {
+    values.iter().position(|value| value == needle)
+}
 
-    values
-        .iter()
-        .position(|value| value == needle)
-        .map(|index| serde_json::json!(index))
-        .unwrap_or_else(|| serde_json::json!(-1))
+#[fn_info]
+fn today() -> String {
+    Local::now().date_naive().to_string()
+}
+
+#[fn_info]
+fn new_line() -> String {
+    "\n".into()
+}
+
+#[allow(dead_code)]
+struct FnInfo {
+    name: &'static str,
+    params: Vec<ParamInfo>,
+    return_type: JsonTypeInfo,
+    function: Box<dyn Fn(&[Value]) -> Value + Send + Sync>,
+}
+
+#[allow(dead_code)]
+struct ParamInfo {
+    name: &'static str,
+    r#type: JsonTypeInfo,
+}
+
+#[allow(dead_code)]
+enum JsonTypeInfo {
+    Any,
+    Null,
+    Bool,
+    Number,
+    String,
+    Array(Arc<JsonTypeInfo>),
+    Object(HashMap<String, JsonTypeInfo>),
+    OneOf(Vec<JsonTypeInfo>),
+}
+
+static FN_INFO_BY_NAME: LazyLock<HashMap<String, FnInfo>> = LazyLock::new(|| {
+    [index_of_info(), today_info(), new_line_info()]
+        .into_iter()
+        .map(|info| (normalized_function_name(info.name), info))
+        .collect()
+});
+
+fn fn_info_for_call(function: &str, values: &[Value]) -> Option<&'static FnInfo> {
+    FN_INFO_BY_NAME
+        .get(&normalized_function_name(function))
+        .filter(|info| info.params.len() == values.len())
+}
+
+fn normalized_function_name(function: &str) -> String {
+    function
+        .chars()
+        .filter(|character| *character != '_')
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {

@@ -2027,10 +2027,20 @@ dependencies = [
  "ndarray",
  "pest",
  "pest_derive",
+ "quickql-macros",
  "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "quickql-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
