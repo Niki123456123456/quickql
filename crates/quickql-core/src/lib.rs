@@ -9,13 +9,19 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 use serde_json::Value;
 
+#[path = "functions/color.rs"]
 mod color;
+#[path = "functions/import/csv.rs"]
 mod csv;
 mod execution;
+#[path = "functions/import/json.rs"]
 mod json;
+#[path = "functions/ml/optics.rs"]
 mod optics;
 mod parsing;
+#[path = "functions/ml/tsne.rs"]
 mod tsne;
+#[path = "functions/ml/umap.rs"]
 mod umap;
 
 pub use execution::{
