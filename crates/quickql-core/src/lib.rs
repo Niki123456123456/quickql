@@ -146,44 +146,6 @@ impl CaluculatedValue {
                 }
 
                 match function.to_ascii_uppercase().as_str() {
-                    "SUM" => {
-                        let sum: f64 = values
-                            .iter()
-                            .flat_map(flatten_value)
-                            .map(|value| match value {
-                                Value::Number(number) => number.as_f64().unwrap_or(0.0),
-                                Value::String(text) => text.parse::<f64>().unwrap_or(0.0),
-                                _ => 0.0,
-                            })
-                            .sum();
-                        if sum.fract() == 0.0 && sum >= i64::MIN as f64 && sum <= i64::MAX as f64 {
-                            serde_json::json!(sum as i64)
-                        } else {
-                            serde_json::json!(sum)
-                        }
-                    }
-                    "ARRAY" => {
-                        Value::Array(values.iter().flat_map(flatten_value).cloned().collect())
-                    }
-                    "ASSIGN" => assign_value(&values),
-                    "PARSE" => parse_json_value(values.first()),
-                    "NUMBER" | "TONUMBER" => number_value(values.first()),
-                    "CEIL" => ceil_value(values.first()),
-                    "MIN" => min_value(&values),
-                    "DISTINCT" => distinct_value(&values),
-                    "SORT" => sort_value(&values),
-                    "SOFTMAX" => softmax_value(&values),
-                    "ENTROPY" => shannon_entropy_value(&values),
-                    "L2" => l2_value(&values),
-                    "COUNT" => serde_json::json!(values.iter().flat_map(flatten_value).count()),
-                    "LEN" => len_value(values.first()),
-                    "SPLIT" => split_value(values.first(), values.get(1)),
-                    "JOINSTRING" => join_string_value(values.first(), values.get(1)),
-                    "RAND" => random_string_value(values.first()),
-                    "RANGE" => range_value(values.first(), values.get(1)),
-                    "AT" => at_value(values.first(), values.get(1)),
-                    "CROSSJOIN" => cross_join_value(values.first()),
-                    "ZIPROWS" => zip_rows_value(values.first()),
                     "GET" => CaluculatedValue::Reference(
                         values
                             .iter()
@@ -196,34 +158,6 @@ impl CaluculatedValue {
                         values.first().unwrap_or_default(),
                         query_path,
                         ql_stack,
-                    ),
-                    "EQ" => Value::Bool(values.first() == values.get(1)),
-                    "OR" => Value::Bool(values.iter().any(value_truthy)),
-                    "AND" => Value::Bool(values.iter().all(value_truthy)),
-                    "ADDDATE" => add_date_value(values.first(), values.get(1)),
-                    "ISODATE" => iso_date_value(values.first()),
-                    "GETDATE" => values
-                        .first()
-                        .and_then(|value| value.as_str())
-                        .and_then(|text| text.split('T').next())
-                        .filter(|date| !date.trim().is_empty())
-                        .map(|date| Value::String(date.trim().to_string()))
-                        .unwrap_or(Value::Null),
-                    "MINDATE" => aggregate_date(
-                        &values
-                            .iter()
-                            .flat_map(flatten_value)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        DateAggregate::Min,
-                    ),
-                    "MAXDATE" => aggregate_date(
-                        &values
-                            .iter()
-                            .flat_map(flatten_value)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        DateAggregate::Max,
                     ),
                     "OPEN" => Self::open_source(
                         values.first(),
@@ -243,22 +177,6 @@ impl CaluculatedValue {
                         reqwest::Method::PUT,
                         ql_stack,
                     ),
-                    "CONCAT" => Value::String(
-                        values
-                            .iter()
-                            .flat_map(flatten_value)
-                            .map(value_to_string)
-                            .collect(),
-                    ),
-                    "BASE64" => values
-                        .first()
-                        .map(value_to_string)
-                        .map(|value| Value::String(BASE64_STANDARD.encode(value)))
-                        .unwrap_or(Value::Null),
-                    "COLOR" => color_value(values.first()),
-                    "OPTICS" => optics::optics_value(values.first(), values.get(1)),
-                    "TSNE" => tsne::tsne_value(values.first(), values.get(1)),
-                    "UMAP" => umap::umap_value(values.first(), values.get(1)),
                     _ => Value::Null,
                 }
             }
@@ -356,33 +274,55 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
-fn color_value(index: Option<&Value>) -> Value {
-    index
-        .and_then(Value::as_u64)
-        .map(color::get_color)
-        .map(Value::String)
-        .unwrap_or(Value::Null)
+#[fn_info(name = "SUM")]
+fn sum_value(values: &[Value]) -> Value {
+    let sum: f64 = values
+        .iter()
+        .flat_map(flatten_value)
+        .map(|value| match value {
+            Value::Number(number) => number.as_f64().unwrap_or(0.0),
+            Value::String(text) => text.parse::<f64>().unwrap_or(0.0),
+            _ => 0.0,
+        })
+        .sum();
+    json_number_value(sum)
 }
 
-fn len_value(value: Option<&Value>) -> Value {
-    value
-        .and_then(Value::as_str)
-        .map(|value| serde_json::json!(value.chars().count()))
-        .unwrap_or(Value::Null)
+#[fn_info(name = "ARRAY")]
+fn array_value(values: &[Value]) -> Vec<Value> {
+    values.iter().flat_map(flatten_value).cloned().collect()
 }
 
-fn number_value(value: Option<&Value>) -> Value {
-    number_from_value(value)
+#[fn_info(name = "COLOR")]
+fn color_value(index: usize) -> String {
+    color::get_color(index as u64)
+}
+
+#[fn_info(name = "LEN")]
+fn len_value(value: &str) -> usize {
+    value.chars().count()
+}
+
+#[fn_info(name = "NUMBER")]
+fn number_value(value: &Value) -> Value {
+    number_from_value(Some(value))
         .map(|value| serde_json::json!(value))
         .unwrap_or(Value::Null)
 }
 
-fn ceil_value(value: Option<&Value>) -> Value {
-    number_from_value(value)
+#[fn_info(name = "TONUMBER")]
+fn to_number_value(value: &Value) -> Value {
+    number_value(value)
+}
+
+#[fn_info(name = "CEIL")]
+fn ceil_value(value: &Value) -> Value {
+    number_from_value(Some(value))
         .map(|value| serde_json::json!(value.ceil() as i64))
         .unwrap_or(Value::Null)
 }
 
+#[fn_info(name = "MIN")]
 fn min_value(values: &[Value]) -> Value {
     values
         .iter()
@@ -393,7 +333,8 @@ fn min_value(values: &[Value]) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn distinct_value(values: &[Value]) -> Value {
+#[fn_info(name = "DISTINCT")]
+fn distinct_value(values: &[Value]) -> Vec<Value> {
     let mut output = Vec::new();
 
     for value in values.iter().flat_map(flatten_value) {
@@ -402,15 +343,17 @@ fn distinct_value(values: &[Value]) -> Value {
         }
     }
 
-    Value::Array(output)
+    output
 }
 
-fn sort_value(values: &[Value]) -> Value {
+#[fn_info(name = "SORT")]
+fn sort_value(values: &[Value]) -> Vec<Value> {
     let mut output: Vec<_> = values.iter().flat_map(flatten_value).cloned().collect();
     output.sort_by(compare_sort_values);
-    Value::Array(output)
+    output
 }
 
+#[fn_info(name = "SOFTMAX")]
 fn softmax_value(values: &[Value]) -> Value {
     let Some(values) = numeric_vector_from_values(values) else {
         return Value::Null;
@@ -434,6 +377,7 @@ fn softmax_value(values: &[Value]) -> Value {
     )
 }
 
+#[fn_info(name = "ENTROPY")]
 fn shannon_entropy_value(values: &[Value]) -> Value {
     let Some(values) = numeric_vector_from_values(values) else {
         return Value::Null;
@@ -459,12 +403,18 @@ fn shannon_entropy_value(values: &[Value]) -> Value {
     serde_json::json!(entropy)
 }
 
+#[fn_info(name = "L2")]
 fn l2_value(values: &[Value]) -> Value {
     let Some(values) = numeric_vector_from_values(values) else {
         return Value::Null;
     };
 
     serde_json::json!(values.iter().map(|value| value * value).sum::<f64>().sqrt())
+}
+
+#[fn_info(name = "COUNT")]
+fn count_value(values: &[Value]) -> usize {
+    values.iter().flat_map(flatten_value).count()
 }
 
 fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
@@ -515,16 +465,11 @@ fn parse_localised_number(value: &str) -> Option<f64> {
     }
 }
 
-fn split_value(input: Option<&Value>, max_part_length: Option<&Value>) -> Value {
-    let (Some(input), Some(max_part_length)) = (
-        input.and_then(Value::as_str),
-        max_part_length
-            .and_then(value_to_i64)
-            .and_then(|length| usize::try_from(length).ok())
-            .filter(|length| *length > 0),
-    ) else {
+#[fn_info(name = "SPLIT")]
+fn split_value(input: &str, max_part_length: usize) -> Value {
+    if max_part_length == 0 {
         return Value::Null;
-    };
+    }
 
     let char_count = input.chars().count();
     if char_count == 0 {
@@ -554,19 +499,15 @@ fn split_value(input: Option<&Value>, max_part_length: Option<&Value>) -> Value 
     Value::Array(parts)
 }
 
-fn join_string_value(input: Option<&Value>, separator: Option<&Value>) -> Value {
-    let (Some(input), Some(separator)) = (input, separator.and_then(Value::as_str)) else {
-        return Value::Null;
-    };
-
-    Value::String(
-        flatten_value(input)
-            .map(value_to_string)
-            .collect::<Vec<_>>()
-            .join(separator),
-    )
+#[fn_info(name = "JOINSTRING")]
+fn join_string_value(input: &Value, separator: &str) -> String {
+    flatten_value(input)
+        .map(value_to_string)
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
+#[fn_info(name = "ASSIGN")]
 fn assign_value(values: &[Value]) -> Value {
     let Some(first) = values.first() else {
         return Value::Null;
@@ -589,27 +530,18 @@ fn assign_value(values: &[Value]) -> Value {
     output
 }
 
-fn parse_json_value(value: Option<&Value>) -> Value {
-    value
-        .and_then(Value::as_str)
-        .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or(Value::Null)
+#[fn_info(name = "PARSE")]
+fn parse_json_value(value: &str) -> Value {
+    serde_json::from_str(value).unwrap_or(Value::Null)
 }
 
-fn random_string_value(length: Option<&Value>) -> Value {
-    let Some(length) = length
-        .and_then(value_to_i64)
-        .and_then(|length| usize::try_from(length).ok())
-    else {
-        return Value::Null;
-    };
-
-    let value: String = rand::thread_rng()
+#[fn_info(name = "RAND")]
+fn random_string_value(length: usize) -> String {
+    rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(length)
         .map(char::from)
-        .collect();
-    Value::String(value)
+        .collect()
 }
 
 fn value_truthy(value: &Value) -> bool {
@@ -623,12 +555,8 @@ fn value_truthy(value: &Value) -> bool {
     }
 }
 
-fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
-    let (Some(start), Some(end)) = (start.and_then(value_to_i64), end.and_then(value_to_i64))
-    else {
-        return Value::Null;
-    };
-
+#[fn_info(name = "RANGE")]
+fn range_value(start: i64, end: i64) -> Value {
     let step = if start <= end { 1 } else { -1 };
     let mut current = start;
     let mut values = Vec::new();
@@ -644,12 +572,9 @@ fn range_value(start: Option<&Value>, end: Option<&Value>) -> Value {
     Value::Array(values)
 }
 
-fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
-    let Some(values) = input.and_then(Value::as_array) else {
-        return Value::Null;
-    };
-
-    if let Some(range) = index.and_then(Value::as_array) {
+#[fn_info(name = "AT")]
+fn at_value(values: &[Value], index: &Value) -> Value {
+    if let Some(range) = index.as_array() {
         let Some(start) = range
             .first()
             .and_then(value_to_i64)
@@ -675,12 +600,40 @@ fn at_value(input: Option<&Value>, index: Option<&Value>) -> Value {
             .unwrap_or(Value::Null);
     }
 
-    index
-        .and_then(value_to_i64)
+    value_to_i64(index)
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| values.get(index))
         .cloned()
         .unwrap_or(Value::Null)
+}
+
+#[fn_info(name = "EQ")]
+fn eq_value(left: &Value, right: &Value) -> bool {
+    left == right
+}
+
+#[fn_info(name = "OR")]
+fn or_value(values: &[Value]) -> bool {
+    values.iter().any(value_truthy)
+}
+
+#[fn_info(name = "AND")]
+fn and_value(values: &[Value]) -> bool {
+    values.iter().all(value_truthy)
+}
+
+#[fn_info(name = "CONCAT")]
+fn concat_value(values: &[Value]) -> String {
+    values
+        .iter()
+        .flat_map(flatten_value)
+        .map(value_to_string)
+        .collect()
+}
+
+#[fn_info(name = "BASE64")]
+fn base64_value(value: &Value) -> String {
+    BASE64_STANDARD.encode(value_to_string(value))
 }
 
 #[fn_info]
@@ -702,6 +655,8 @@ fn new_line() -> String {
 struct FnInfo {
     name: &'static str,
     params: Vec<ParamInfo>,
+    min_params: usize,
+    variadic: bool,
     return_type: JsonTypeInfo,
     function: Box<dyn Fn(&[Value]) -> Value + Send + Sync>,
 }
@@ -725,16 +680,58 @@ enum JsonTypeInfo {
 }
 
 static FN_INFO_BY_NAME: LazyLock<HashMap<String, FnInfo>> = LazyLock::new(|| {
-    [index_of_info(), today_info(), new_line_info()]
-        .into_iter()
-        .map(|info| (normalized_function_name(info.name), info))
-        .collect()
+    vec![
+        sum_value_info(),
+        array_value_info(),
+        assign_value_info(),
+        parse_json_value_info(),
+        number_value_info(),
+        to_number_value_info(),
+        ceil_value_info(),
+        min_value_info(),
+        distinct_value_info(),
+        sort_value_info(),
+        softmax_value_info(),
+        shannon_entropy_value_info(),
+        l2_value_info(),
+        count_value_info(),
+        len_value_info(),
+        split_value_info(),
+        join_string_value_info(),
+        random_string_value_info(),
+        range_value_info(),
+        at_value_info(),
+        cross_join_value_info(),
+        zip_rows_value_info(),
+        eq_value_info(),
+        or_value_info(),
+        and_value_info(),
+        add_date_value_info(),
+        iso_date_value_info(),
+        get_date_value_info(),
+        min_date_value_info(),
+        max_date_value_info(),
+        concat_value_info(),
+        base64_value_info(),
+        color_value_info(),
+        optics_value_info(),
+        tsne_value_info(),
+        umap_value_info(),
+        index_of_info(),
+        today_info(),
+        new_line_info(),
+    ]
+    .into_iter()
+    .map(|info| (normalized_function_name(info.name), info))
+    .collect()
 });
 
 fn fn_info_for_call(function: &str, values: &[Value]) -> Option<&'static FnInfo> {
     FN_INFO_BY_NAME
         .get(&normalized_function_name(function))
-        .filter(|info| info.params.len() == values.len())
+        .filter(|info| {
+            values.len() >= info.min_params && (info.variadic || values.len() <= info.params.len())
+        })
 }
 
 fn normalized_function_name(function: &str) -> String {
@@ -745,12 +742,9 @@ fn normalized_function_name(function: &str) -> String {
         .collect()
 }
 
-fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
-    let (Some(date), Some(days)) = (
-        date.and_then(Value::as_str)
-            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()),
-        days.and_then(value_to_i64),
-    ) else {
+#[fn_info(name = "ADDDATE")]
+fn add_date_value(date: &str, days: i64) -> Value {
+    let Some(date) = NaiveDate::parse_from_str(date, "%Y-%m-%d").ok() else {
         return Value::Null;
     };
 
@@ -759,11 +753,9 @@ fn add_date_value(date: Option<&Value>, days: Option<&Value>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn iso_date_value(date: Option<&Value>) -> Value {
-    let Some(date_key) = date
-        .and_then(Value::as_str)
-        .and_then(|date| parse_date_key(date).ok().flatten())
-    else {
+#[fn_info(name = "ISODATE")]
+fn iso_date_value(date: &str) -> Value {
+    let Some(date_key) = parse_date_key(date).ok().flatten() else {
         return Value::Null;
     };
 
@@ -773,8 +765,58 @@ fn iso_date_value(date: Option<&Value>) -> Value {
     Value::String(format!("{year:04}-{month:02}-{day:02}"))
 }
 
-fn cross_join_value(input: Option<&Value>) -> Value {
-    let Some(input) = input.and_then(Value::as_object) else {
+#[fn_info(name = "GETDATE")]
+fn get_date_value(text: &str) -> Value {
+    text.split('T')
+        .next()
+        .map(str::trim)
+        .filter(|date| !date.is_empty())
+        .map(|date| Value::String(date.to_string()))
+        .unwrap_or(Value::Null)
+}
+
+#[fn_info(name = "MINDATE")]
+fn min_date_value(values: &[Value]) -> Value {
+    aggregate_date(
+        &values
+            .iter()
+            .flat_map(flatten_value)
+            .cloned()
+            .collect::<Vec<_>>(),
+        DateAggregate::Min,
+    )
+}
+
+#[fn_info(name = "MAXDATE")]
+fn max_date_value(values: &[Value]) -> Value {
+    aggregate_date(
+        &values
+            .iter()
+            .flat_map(flatten_value)
+            .cloned()
+            .collect::<Vec<_>>(),
+        DateAggregate::Max,
+    )
+}
+
+#[fn_info(name = "OPTICS")]
+fn optics_value(input: Option<&Value>, options: Option<&Value>) -> Value {
+    optics::optics_value(input, options)
+}
+
+#[fn_info(name = "TSNE")]
+fn tsne_value(input: Option<&Value>, options: Option<&Value>) -> Value {
+    tsne::tsne_value(input, options)
+}
+
+#[fn_info(name = "UMAP")]
+fn umap_value(input: Option<&Value>, options: Option<&Value>) -> Value {
+    umap::umap_value(input, options)
+}
+
+#[fn_info(name = "CROSSJOIN")]
+fn cross_join_value(input: &Value) -> Value {
+    let Some(input) = input.as_object() else {
         return Value::Null;
     };
 
@@ -818,8 +860,9 @@ fn cross_join_rows(
     current.remove(key);
 }
 
-fn zip_rows_value(input: Option<&Value>) -> Value {
-    let Some(input) = input.and_then(Value::as_object) else {
+#[fn_info(name = "ZIPROWS")]
+fn zip_rows_value(input: &Value) -> Value {
+    let Some(input) = input.as_object() else {
         return Value::Null;
     };
 

@@ -1,31 +1,39 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, FnArg, Ident, ItemFn, Pat, ReturnType, Type};
+use syn::{
+    parse_macro_input, punctuated::Punctuated, FnArg, Ident, ItemFn, Lit, Meta, Pat, ReturnType,
+    Token, Type,
+};
 
 #[proc_macro_attribute]
 pub fn fn_info(args: TokenStream, input: TokenStream) -> TokenStream {
-    if !args.is_empty() {
-        return quote! {
-            compile_error!("fn_info derives metadata from the function shape and does not accept arguments");
-        }
-        .into();
-    }
-
     let function = parse_macro_input!(input as ItemFn);
-    expand_fn_info(function)
+    let args = parse_macro_input!(args with Punctuated::<Meta, Token![,]>::parse_terminated);
+    expand_fn_info(args, function)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-fn expand_fn_info(function: ItemFn) -> syn::Result<TokenStream2> {
+fn expand_fn_info(
+    args: Punctuated<Meta, Token![,]>,
+    function: ItemFn,
+) -> syn::Result<TokenStream2> {
     let fn_name = &function.sig.ident;
     let info_name = format_ident!("{fn_name}_info");
-    let function_name = fn_name.to_string();
+    let function_name = function_info_name(&args)?.unwrap_or_else(|| fn_name.to_string());
 
     let mut params = Vec::new();
     let mut extract_args = Vec::new();
     let mut call_args = Vec::new();
+    let mut min_params = 0usize;
+    let input_count = function.sig.inputs.len();
+    let variadic = input_count == 1
+        && function
+            .sig
+            .inputs
+            .iter()
+            .all(|arg| matches!(arg, FnArg::Typed(arg) if is_value_slice(&arg.ty) || is_value_vec_ref(&arg.ty)));
 
     for (index, arg) in function.sig.inputs.iter().enumerate() {
         let FnArg::Typed(arg) = arg else {
@@ -44,7 +52,11 @@ fn expand_fn_info(function: ItemFn) -> syn::Result<TokenStream2> {
         let ident = &pat.ident;
         let name = ident.to_string();
         let type_info = type_info_expr(&arg.ty)?;
-        let extraction = extraction_expr(index, ident, &arg.ty)?;
+        let extraction = extraction_expr(index, input_count, ident, &arg.ty)?;
+
+        if !is_option_value_ref(&arg.ty) && !is_option_usize(&arg.ty) {
+            min_params = index + 1;
+        }
 
         params.push(quote! {
             ParamInfo {
@@ -65,6 +77,8 @@ fn expand_fn_info(function: ItemFn) -> syn::Result<TokenStream2> {
             FnInfo {
                 name: #function_name,
                 params: vec![#(#params),*],
+                min_params: #min_params,
+                variadic: #variadic,
                 return_type: #return_type,
                 function: Box::new(|params: &[Value]| {
                     #(#extract_args)*
@@ -75,6 +89,41 @@ fn expand_fn_info(function: ItemFn) -> syn::Result<TokenStream2> {
 
         #function
     })
+}
+
+fn function_info_name(args: &Punctuated<Meta, Token![,]>) -> syn::Result<Option<String>> {
+    let mut name = None;
+    for arg in args {
+        let Meta::NameValue(name_value) = arg else {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "fn_info only supports `name = \"...\"` arguments",
+            ));
+        };
+
+        if !name_value.path.is_ident("name") {
+            return Err(syn::Error::new_spanned(
+                &name_value.path,
+                "unsupported fn_info argument",
+            ));
+        }
+
+        let syn::Expr::Lit(expr) = &name_value.value else {
+            return Err(syn::Error::new_spanned(
+                &name_value.value,
+                "fn_info name must be a string literal",
+            ));
+        };
+        let Lit::Str(value) = &expr.lit else {
+            return Err(syn::Error::new_spanned(
+                &expr.lit,
+                "fn_info name must be a string literal",
+            ));
+        };
+
+        name = Some(value.value());
+    }
+    Ok(name)
 }
 
 fn type_info_expr(ty: &Type) -> syn::Result<TokenStream2> {
@@ -89,10 +138,16 @@ fn type_info_expr(ty: &Type) -> syn::Result<TokenStream2> {
 fn json_type_info_expr(ty: &Type) -> Option<TokenStream2> {
     if is_value(ty) || is_value_ref(ty) || is_option_value_ref(ty) {
         Some(quote! { JsonTypeInfo::Any })
-    } else if is_string(ty) {
+    } else if is_string(ty) || is_str_ref(ty) {
         Some(quote! { JsonTypeInfo::String })
     } else if is_value_slice(ty) || is_value_vec_ref(ty) {
         Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
+    } else if is_value_vec(ty) {
+        Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
+    } else if is_usize(ty) || is_i64(ty) || is_f64(ty) {
+        Some(quote! { JsonTypeInfo::Number })
+    } else if is_bool(ty) {
+        Some(quote! { JsonTypeInfo::Bool })
     } else if is_option_usize(ty) {
         Some(quote! { JsonTypeInfo::OneOf(vec![JsonTypeInfo::Number, JsonTypeInfo::Null]) })
     } else {
@@ -100,13 +155,24 @@ fn json_type_info_expr(ty: &Type) -> Option<TokenStream2> {
     }
 }
 
-fn extraction_expr(index: usize, ident: &Ident, ty: &Type) -> syn::Result<TokenStream2> {
+fn extraction_expr(
+    index: usize,
+    input_count: usize,
+    ident: &Ident,
+    ty: &Type,
+) -> syn::Result<TokenStream2> {
     if is_value_slice(ty) || is_value_vec_ref(ty) {
-        Ok(quote! {
-            let Some(#ident) = params.get(#index).and_then(Value::as_array) else {
-                return Value::Null;
-            };
-        })
+        if input_count == 1 {
+            Ok(quote! {
+                let #ident = params;
+            })
+        } else {
+            Ok(quote! {
+                let Some(#ident) = params.get(#index).and_then(Value::as_array) else {
+                    return Value::Null;
+                };
+            })
+        }
     } else if is_value_ref(ty) {
         Ok(quote! {
             let Some(#ident) = params.get(#index) else {
@@ -116,6 +182,34 @@ fn extraction_expr(index: usize, ident: &Ident, ty: &Type) -> syn::Result<TokenS
     } else if is_option_value_ref(ty) {
         Ok(quote! {
             let #ident = params.get(#index);
+        })
+    } else if is_str_ref(ty) {
+        Ok(quote! {
+            let Some(#ident) = params.get(#index).and_then(Value::as_str) else {
+                return Value::Null;
+            };
+        })
+    } else if is_usize(ty) {
+        Ok(quote! {
+            let Some(#ident) = params
+                .get(#index)
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                return Value::Null;
+            };
+        })
+    } else if is_i64(ty) {
+        Ok(quote! {
+            let Some(#ident) = params.get(#index).and_then(Value::as_i64) else {
+                return Value::Null;
+            };
+        })
+    } else if is_f64(ty) {
+        Ok(quote! {
+            let Some(#ident) = params.get(#index).and_then(Value::as_f64) else {
+                return Value::Null;
+            };
         })
     } else {
         Err(syn::Error::new_spanned(
@@ -153,6 +247,15 @@ fn return_value_expr(
         ReturnType::Type(_, ty) if is_string(ty) => Ok(quote! {
             Value::String(#fn_name(#(#call_args),*))
         }),
+        ReturnType::Type(_, ty) if is_value_vec(ty) => Ok(quote! {
+            Value::Array(#fn_name(#(#call_args),*))
+        }),
+        ReturnType::Type(_, ty) if is_usize(ty) || is_i64(ty) || is_f64(ty) => Ok(quote! {
+            serde_json::json!(#fn_name(#(#call_args),*))
+        }),
+        ReturnType::Type(_, ty) if is_bool(ty) => Ok(quote! {
+            Value::Bool(#fn_name(#(#call_args),*))
+        }),
         ReturnType::Type(_, ty) if is_option_usize(ty) => Ok(quote! {
             #fn_name(#(#call_args),*)
                 .map(|value| serde_json::json!(value))
@@ -166,34 +269,59 @@ fn return_value_expr(
 }
 
 fn is_value(ty: &Type) -> bool {
-    type_text(ty) == "Value"
+    normalized_type_text(ty) == "Value"
 }
 
 fn is_string(ty: &Type) -> bool {
-    type_text(ty) == "String"
+    normalized_type_text(ty) == "String"
+}
+
+fn is_str_ref(ty: &Type) -> bool {
+    normalized_type_text(ty) == "&str"
 }
 
 fn is_value_ref(ty: &Type) -> bool {
-    type_text(ty) == "& Value"
+    normalized_type_text(ty) == "&Value"
 }
 
 fn is_value_slice(ty: &Type) -> bool {
-    type_text(ty) == "& [Value]"
+    normalized_type_text(ty) == "&[Value]"
 }
 
 fn is_value_vec_ref(ty: &Type) -> bool {
-    matches!(type_text(ty).as_str(), "& Vec < Value >" | "& Vec<Value>")
+    normalized_type_text(ty) == "&Vec<Value>"
+}
+
+fn is_value_vec(ty: &Type) -> bool {
+    normalized_type_text(ty) == "Vec<Value>"
 }
 
 fn is_option_value_ref(ty: &Type) -> bool {
-    matches!(
-        type_text(ty).as_str(),
-        "Option < & Value >" | "Option<& Value>" | "Option<&Value>"
-    )
+    normalized_type_text(ty) == "Option<&Value>"
 }
 
 fn is_option_usize(ty: &Type) -> bool {
-    matches!(type_text(ty).as_str(), "Option < usize >" | "Option<usize>")
+    normalized_type_text(ty) == "Option<usize>"
+}
+
+fn is_usize(ty: &Type) -> bool {
+    normalized_type_text(ty) == "usize"
+}
+
+fn is_i64(ty: &Type) -> bool {
+    normalized_type_text(ty) == "i64"
+}
+
+fn is_f64(ty: &Type) -> bool {
+    normalized_type_text(ty) == "f64"
+}
+
+fn is_bool(ty: &Type) -> bool {
+    normalized_type_text(ty) == "bool"
+}
+
+fn normalized_type_text(ty: &Type) -> String {
+    type_text(ty).replace(' ', "")
 }
 
 fn type_text(ty: &Type) -> String {
