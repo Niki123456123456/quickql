@@ -2023,6 +2023,7 @@ dependencies = [
  "faer",
  "linfa",
  "linfa-clustering",
+ "linfa-nn",
  "manifolds-rs",
  "ndarray",
  "pest",

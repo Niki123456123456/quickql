@@ -12,6 +12,7 @@ csv.workspace = true
 faer.workspace = true
 linfa.workspace = true
 linfa-clustering.workspace = true
+linfa-nn.workspace = true
 manifolds-rs.workspace = true
 ndarray.workspace = true
 pest.workspace = true
