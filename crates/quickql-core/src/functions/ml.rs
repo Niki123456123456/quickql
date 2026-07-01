@@ -1,6 +1,6 @@
+use crate::FnInfo;
 use quickql_macros::fn_info;
 use serde_json::Value;
-use crate::FnInfo;
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![

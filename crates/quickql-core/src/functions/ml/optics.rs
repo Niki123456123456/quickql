@@ -6,9 +6,9 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct Config {
-    min_points : Option<usize>,
-    eps : Option<f64>,
-    cluster_eps : Option<f64>,
+    min_points: Option<usize>,
+    eps: Option<f64>,
+    cluster_eps: Option<f64>,
 }
 
 #[fn_info()]
@@ -22,9 +22,7 @@ pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
         return Value::Null;
     }
 
-    let min_points = config
-        .min_points
-        .unwrap_or(2);
+    let min_points = config.min_points.unwrap_or(2);
     if min_points < 2 || min_points > rows.len() {
         return Value::Null;
     }
@@ -37,15 +35,11 @@ pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
         Err(_) => return Value::Null,
     };
 
-    let eps = config
-        .eps
-        .unwrap_or(f64::MAX);
+    let eps = config.eps.unwrap_or(f64::MAX);
     if !eps.is_finite() || eps <= 0.0 {
         return Value::Null;
     }
-    let cluster_eps = config
-        .cluster_eps
-        .unwrap_or(eps);
+    let cluster_eps = config.cluster_eps.unwrap_or(eps);
     if !cluster_eps.is_finite() || cluster_eps <= 0.0 {
         return Value::Null;
     }
@@ -64,8 +58,7 @@ pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
         .map(|sample: &linfa_clustering::Sample<f64>| {
             let core_distance = *sample.core_distance();
             let reachability_distance = *sample.reachability_distance();
-            let starts_cluster =
-                core_distance.is_some_and(|distance| distance <= cluster_eps);
+            let starts_cluster = core_distance.is_some_and(|distance| distance <= cluster_eps);
             let cluster_index = if reachability_distance
                 .is_none_or(|distance| distance > cluster_eps)
                 || current_cluster.is_none()

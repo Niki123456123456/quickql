@@ -11,8 +11,8 @@ pub(crate) struct Config {
     approx: Option<String>,
     seed: Option<usize>,
     verbose: Option<usize>,
-    perplexity : Option<f64>,
-    dim : Option<usize>
+    perplexity: Option<f64>,
+    n_dim: Option<usize>,
 }
 
 #[fn_info()]
@@ -32,7 +32,7 @@ pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Config) -> Option<Vec<Vec<f64>>>
     let verbose = config.verbose.unwrap_or(0);
 
     let mut params = TsneParams::new_default_2d(config.perplexity);
-    params.n_dim = config.dim.unwrap_or(params.n_dim);
+    params.n_dim = config.n_dim.unwrap_or(params.n_dim);
 
     let Ok(embedding) =
         manifolds_rs::tsne(data.as_ref(), None, &params, &approx_type, seed, verbose)
@@ -40,7 +40,16 @@ pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Config) -> Option<Vec<Vec<f64>>>
         return None;
     };
 
-    Some(embedding)
+    let n_dim = embedding.len();
+    Some(
+        (0..rows.len())
+            .map(|row| {
+                (0..n_dim)
+                    .map(|dimension| embedding[dimension][row])
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 fn params_from_config(config: Option<&serde_json::Map<String, Value>>) -> TsneParams<f64> {

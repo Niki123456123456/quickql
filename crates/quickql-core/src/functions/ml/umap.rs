@@ -29,7 +29,16 @@ pub(crate) fn umap(rows: Vec<Vec<f64>>, config: Option<&Value>) -> Option<Vec<Ve
         return None;
     };
 
-    Some(embedding)
+    let n_dim = embedding.len();
+    Some(
+        (0..rows.len())
+            .map(|row| {
+                (0..n_dim)
+                    .map(|dimension| embedding[dimension][row])
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 fn params_from_config(
