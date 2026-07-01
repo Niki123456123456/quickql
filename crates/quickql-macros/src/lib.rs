@@ -21,6 +21,7 @@ fn expand_fn_info(
 ) -> syn::Result<TokenStream2> {
     let fn_name = &function.sig.ident;
     let info_name = format_ident!("{fn_name}_info");
+    let visibility = &function.vis;
     let function_name =
         function_info_name(&args)?.unwrap_or_else(|| default_function_name(fn_name));
 
@@ -87,7 +88,7 @@ fn expand_fn_info(
         query_index += 1;
 
         params.push(quote! {
-            ParamInfo {
+            crate::ParamInfo {
                 name: #name,
                 r#type: #type_info,
             }
@@ -101,8 +102,8 @@ fn expand_fn_info(
 
     Ok(quote! {
         #[allow(dead_code)]
-        fn #info_name() -> FnInfo {
-            FnInfo {
+        #visibility fn #info_name() -> crate::FnInfo {
+            crate::FnInfo {
                 name: #function_name,
                 params: vec![#(#params),*],
                 min_params: #min_params,
@@ -169,27 +170,41 @@ fn type_info_expr(ty: &Type) -> syn::Result<TokenStream2> {
 
 fn json_type_info_expr(ty: &Type) -> Option<TokenStream2> {
     if is_value(ty) || is_value_ref(ty) || is_option_value_ref(ty) {
-        Some(quote! { JsonTypeInfo::Any })
+        Some(quote! { crate::JsonTypeInfo::Any })
     } else if is_string(ty) || is_str_ref(ty) {
-        Some(quote! { JsonTypeInfo::String })
+        Some(quote! { crate::JsonTypeInfo::String })
     } else if is_value_slice(ty) || is_value_vec_ref(ty) {
-        Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
+        Some(quote! { crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Any.into()) })
     } else if is_value_vec(ty) {
-        Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Any.into()) })
+        Some(quote! { crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Any.into()) })
+    } else if is_f64_matrix(ty) || is_f64_matrix_ref(ty) {
+        Some(
+            quote! { crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Number.into()).into()) },
+        )
     } else if is_f64_vec(ty) || is_f64_vec_ref(ty) {
-        Some(quote! { JsonTypeInfo::Array(JsonTypeInfo::Number.into()) })
+        Some(quote! { crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Number.into()) })
     } else if is_usize(ty) || is_i64(ty) || is_f64(ty) {
-        Some(quote! { JsonTypeInfo::Number })
+        Some(quote! { crate::JsonTypeInfo::Number })
     } else if is_bool(ty) {
-        Some(quote! { JsonTypeInfo::Bool })
+        Some(quote! { crate::JsonTypeInfo::Bool })
+    } else if is_option_f64_matrix(ty) {
+        Some(quote! {
+            crate::JsonTypeInfo::OneOf(vec![
+                crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Array(crate::JsonTypeInfo::Number.into()).into()),
+                crate::JsonTypeInfo::Null,
+            ])
+        })
     } else if is_option_usize(ty) || is_option_f64(ty) {
-        Some(quote! { JsonTypeInfo::OneOf(vec![JsonTypeInfo::Number, JsonTypeInfo::Null]) })
+        Some(
+            quote! { crate::JsonTypeInfo::OneOf(vec![crate::JsonTypeInfo::Number, crate::JsonTypeInfo::Null]) },
+        )
     } else if let Some((left, right)) = one_of_types(ty) {
-        let left = json_type_info_expr(left).unwrap_or_else(|| quote! { JsonTypeInfo::Any });
-        let right = json_type_info_expr(right).unwrap_or_else(|| quote! { JsonTypeInfo::Any });
-        Some(quote! { JsonTypeInfo::OneOf(vec![#left, #right]) })
+        let left = json_type_info_expr(left).unwrap_or_else(|| quote! { crate::JsonTypeInfo::Any });
+        let right =
+            json_type_info_expr(right).unwrap_or_else(|| quote! { crate::JsonTypeInfo::Any });
+        Some(quote! { crate::JsonTypeInfo::OneOf(vec![#left, #right]) })
     } else if is_deserializable_type(ty) {
-        Some(quote! { JsonTypeInfo::Any })
+        Some(quote! { crate::JsonTypeInfo::Any })
     } else {
         None
     }
@@ -313,7 +328,7 @@ fn call_arg_expr(ident: &Ident, ty: &Type) -> TokenStream2 {
 
 fn return_type_expr(output: &ReturnType) -> syn::Result<TokenStream2> {
     match output {
-        ReturnType::Default => Ok(quote! { JsonTypeInfo::Null }),
+        ReturnType::Default => Ok(quote! { crate::JsonTypeInfo::Null }),
         ReturnType::Type(_, ty) => json_type_info_expr(ty).ok_or_else(|| {
             syn::Error::new_spanned(
                 ty,
@@ -342,7 +357,7 @@ fn return_value_expr(
         ReturnType::Type(_, ty) if is_value_vec(ty) => Ok(quote! {
             Value::Array(#fn_name(#(#call_args),*))
         }),
-        ReturnType::Type(_, ty) if is_f64_vec(ty) => Ok(quote! {
+        ReturnType::Type(_, ty) if is_f64_vec(ty) || is_f64_matrix(ty) => Ok(quote! {
             serde_json::json!(#fn_name(#(#call_args),*))
         }),
         ReturnType::Type(_, ty) if is_usize(ty) || is_i64(ty) || is_f64(ty) => Ok(quote! {
@@ -351,11 +366,15 @@ fn return_value_expr(
         ReturnType::Type(_, ty) if is_bool(ty) => Ok(quote! {
             Value::Bool(#fn_name(#(#call_args),*))
         }),
-        ReturnType::Type(_, ty) if is_option_usize(ty) || is_option_f64(ty) => Ok(quote! {
+        ReturnType::Type(_, ty)
+            if is_option_usize(ty) || is_option_f64(ty) || is_option_f64_matrix(ty) =>
+        {
+            Ok(quote! {
             #fn_name(#(#call_args),*)
                 .map(|value| serde_json::json!(value))
                 .unwrap_or(Value::Null)
-        }),
+            })
+        }
         ReturnType::Type(_, ty) => Err(syn::Error::new_spanned(
             ty,
             format!("unsupported fn_info return type `{}`", type_text(ty)),
@@ -397,6 +416,18 @@ fn is_f64_vec_ref(ty: &Type) -> bool {
 
 fn is_f64_vec(ty: &Type) -> bool {
     normalized_type_text(ty) == "Vec<f64>"
+}
+
+fn is_f64_matrix_ref(ty: &Type) -> bool {
+    normalized_type_text(ty) == "&Vec<Vec<f64>>"
+}
+
+fn is_f64_matrix(ty: &Type) -> bool {
+    normalized_type_text(ty) == "Vec<Vec<f64>>"
+}
+
+fn is_option_f64_matrix(ty: &Type) -> bool {
+    normalized_type_text(ty) == "Option<Vec<Vec<f64>>>"
 }
 
 fn is_option_value_ref(ty: &Type) -> bool {

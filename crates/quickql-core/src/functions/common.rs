@@ -1,7 +1,7 @@
 use quickql_macros::fn_info;
 use serde_json::Value;
 
-use crate::{color as color_function, execution, FnInfo, JsonTypeInfo, ParamInfo};
+use crate::{color as color_function, execution, FnInfo};
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![assign_info(), parse_json_info(), color_info()]

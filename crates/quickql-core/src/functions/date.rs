@@ -1,12 +1,13 @@
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate};
 use quickql_macros::fn_info;
 use serde_json::Value;
 
-use crate::{execution::parse_date_key, flatten_value, FnInfo, JsonTypeInfo, ParamInfo};
+use crate::{execution::parse_date_key, flatten_value, FnInfo};
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![
         add_date_info(),
+        date_diff_info(),
         iso_date_info(),
         get_date_info(),
         min_date_info(),
@@ -56,6 +57,15 @@ fn add_date(date: &str, days: i64) -> Value {
     date.checked_add_signed(Duration::days(days))
         .map(|date| Value::String(date.to_string()))
         .unwrap_or(Value::Null)
+}
+
+#[fn_info()]
+fn date_diff(start: &str, end: &str) -> i64 {
+    let parse = |s: &str| DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f%z");
+    let (Ok(start), Ok(end)) = (parse(start), parse(end)) else {
+        return 0;
+    };
+    (end - start).num_days()
 }
 
 #[fn_info()]

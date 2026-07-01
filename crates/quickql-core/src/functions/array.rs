@@ -1,7 +1,7 @@
 use quickql_macros::fn_info;
 use serde_json::Value;
 
-use crate::{flatten_value, value_to_string, FnInfo, JsonTypeInfo, ParamInfo};
+use crate::{flatten_value, value_to_string, FnInfo};
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![

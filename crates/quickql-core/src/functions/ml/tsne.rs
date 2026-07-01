@@ -1,22 +1,20 @@
 use faer::Mat;
 use manifolds_rs::prelude::{NearestNeighbourParams, TsneOptimParams};
 use manifolds_rs::TsneParams;
+use quickql_macros::fn_info;
 use serde_json::Value;
 
-use crate::umap::{get_bool, get_f64, get_string, get_usize, parse_matrix};
+use crate::umap::{get_bool, get_f64, get_string, get_usize};
 
-pub(crate) fn tsne_value(data: Option<&Value>, config: Option<&Value>) -> Value {
-    let Some(rows) = data.and_then(parse_matrix) else {
-        return Value::Null;
-    };
-
+#[fn_info()]
+pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Option<&Value>) -> Option<Vec<Vec<f64>>>{
     if rows.len() < 2 {
-        return Value::Null;
+        return None;
     }
 
     let n_features = rows[0].len();
     if n_features == 0 || rows.iter().any(|row| row.len() != n_features) {
-        return Value::Null;
+        return None;
     }
 
     let data = Mat::from_fn(rows.len(), n_features, |i, j| rows[i][j]);
@@ -34,30 +32,16 @@ pub(crate) fn tsne_value(data: Option<&Value>, config: Option<&Value>) -> Value 
 
     let approx_type = normalise_approx_type(&approx_type);
     let Some(approx_type) = approx_type.as_deref() else {
-        return Value::Null;
+        return None;
     };
 
     let Ok(embedding) =
         manifolds_rs::tsne(data.as_ref(), None, &params, approx_type, seed, verbose)
     else {
-        return Value::Null;
+        return None;
     };
 
-    if embedding.len() != params.n_dim || embedding.iter().any(|dim| dim.len() != rows.len()) {
-        return Value::Null;
-    }
-
-    Value::Array(
-        (0..rows.len())
-            .map(|row| {
-                Value::Array(
-                    (0..params.n_dim)
-                        .map(|dim| serde_json::json!(embedding[dim][row]))
-                        .collect(),
-                )
-            })
-            .collect(),
-    )
+    Some(embedding)
 }
 
 fn params_from_config(config: Option<&serde_json::Map<String, Value>>) -> TsneParams<f64> {

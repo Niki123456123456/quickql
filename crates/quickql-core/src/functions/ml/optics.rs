@@ -1,15 +1,18 @@
 use linfa::prelude::Transformer;
 use linfa_clustering::Optics;
 use ndarray::Array2;
+use quickql_macros::fn_info;
 use serde_json::Value;
 
-use crate::umap::{get_f64, get_usize, parse_matrix};
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct Config {
+    min_points : Option<usize>,
+    eps : Option<f64>,
+    cluster_eps : Option<f64>,
+}
 
-pub(crate) fn optics_value(data: Option<&Value>, config: Option<&Value>) -> Value {
-    let Some(rows) = data.and_then(parse_matrix) else {
-        return Value::Null;
-    };
-
+#[fn_info()]
+pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
     if rows.len() < 2 {
         return Value::Null;
     }
@@ -19,9 +22,8 @@ pub(crate) fn optics_value(data: Option<&Value>, config: Option<&Value>) -> Valu
         return Value::Null;
     }
 
-    let config = config.and_then(Value::as_object);
     let min_points = config
-        .and_then(|config| get_usize(config, &["minPoints", "min_points"]))
+        .min_points
         .unwrap_or(2);
     if min_points < 2 || min_points > rows.len() {
         return Value::Null;
@@ -36,35 +38,19 @@ pub(crate) fn optics_value(data: Option<&Value>, config: Option<&Value>) -> Valu
     };
 
     let tolerance = config
-        .and_then(|config| get_f64(config, &["tolerance", "eps"]))
+        .eps
         .unwrap_or(f64::MAX);
     if !tolerance.is_finite() || tolerance <= 0.0 {
         return Value::Null;
     }
     let cluster_tolerance = config
-        .and_then(|config| {
-            get_f64(
-                config,
-                &[
-                    "clusterTolerance",
-                    "cluster_tolerance",
-                    "clusterEps",
-                    "cluster_eps",
-                ],
-            )
-        })
+        .cluster_eps
         .unwrap_or(tolerance);
     if !cluster_tolerance.is_finite() || cluster_tolerance <= 0.0 {
         return Value::Null;
     }
 
-    let mut params = Optics::params(min_points);
-    if config
-        .and_then(|config| get_f64(config, &["tolerance", "eps"]))
-        .is_some()
-    {
-        params = params.tolerance(tolerance);
-    }
+    let params = Optics::params(min_points).tolerance(tolerance);
 
     let Ok(analysis) = params.transform(observations.view()) else {
         return Value::Null;

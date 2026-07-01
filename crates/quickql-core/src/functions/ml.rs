@@ -1,17 +1,15 @@
 use quickql_macros::fn_info;
 use serde_json::Value;
-
-use crate::{optics as optics_function, tsne as tsne_function, umap as umap_function};
-use crate::{FnInfo, JsonTypeInfo, ParamInfo};
+use crate::FnInfo;
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![
         softmax_info(),
         entropy_info(),
         l2_info(),
-        optics_info(),
-        tsne_info(),
-        umap_info(),
+        crate::tsne::tsne_info(),
+        crate::optics::optics_info(),
+        crate::umap::umap_info(),
     ]
 }
 
@@ -43,19 +41,4 @@ fn entropy(values: &Vec<f64>) -> f64 {
 #[fn_info()]
 fn l2(values: &Vec<f64>) -> f64 {
     values.iter().map(|value| value * value).sum::<f64>().sqrt()
-}
-
-#[fn_info()]
-fn optics(input: Option<&Value>, options: Option<&Value>) -> Value {
-    optics_function::optics_value(input, options)
-}
-
-#[fn_info()]
-fn tsne(input: Option<&Value>, options: Option<&Value>) -> Value {
-    tsne_function::tsne_value(input, options)
-}
-
-#[fn_info()]
-fn umap(input: Option<&Value>, options: Option<&Value>) -> Value {
-    umap_function::umap_value(input, options)
 }
