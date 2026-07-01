@@ -4,48 +4,6 @@ use manifolds_rs::UmapParams;
 use quickql_macros::fn_info;
 use serde_json::Value;
 
-struct Config {
-    /// Distance metric, one of `"euclidean"` or `"cosine"`
-    pub dist_metric: String,
-    /// Annoy: Number of trees to use to build the index. Defaults to `50` like
-    /// the `uwot` package.
-    pub n_tree: usize,
-    /// Annoy: Optional search budget per tree. If not provided, defaults to
-    /// `k * n_tree * 20` candidates.
-    pub search_budget: Option<usize>,
-    /// HNSW: connections per given layer to use
-    pub m: usize,
-    /// HNSW: construction budget
-    pub ef_construction: usize,
-    /// HNSW: search budget
-    pub ef_search: usize,
-    /// NNDescent: diversification probability after generation of the graph.
-    pub diversify_prob: f64,
-    /// NNDescent: convergence criterium. If less than these percentage of
-    /// neighbours have been udpated, the algorithm counts as converged.
-    pub delta: f64,
-    /// NNDescent: optional beam search budget for querying.
-    pub ef_budget: Option<usize>,
-    /// BallTree: Proportions of N to search in the BallTree
-    pub bt_budget: f64,
-    /// IVF: Number of lists, clusters to use. If not provided, will default
-    /// to `sqrt(n)` lists.
-    pub n_list: Option<usize>,
-    /// IVF: Number of lists to probes. If not provided, will default to
-    /// to `sqrt(n_list)` lists.
-    pub n_probes: Option<usize>,
-    /// Convergence tolerance for smooth kNN distance binary search (typically
-    /// 1e-5). Controls how precisely sigma values are computed.
-    pub bandwidth: f64,
-    /// Number of nearest neighbours assumed to be at distance zero (typically
-    /// 1.0). Allows for local manifold structure by treating the nearest
-    /// neighbour(s) as having maximal membership strength.
-    pub local_connectivity: f64,
-    /// Balance between fuzzy union and directed graph during symmetrisation
-    /// (typically 1.0).
-    pub mix_weight: f64,
-}
-
 #[fn_info()]
 pub(crate) fn umap(rows: Vec<Vec<f64>>, config: Option<&Value>) -> Option<Vec<Vec<f64>>> {
     if rows.len() < 2 {

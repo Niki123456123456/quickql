@@ -6,8 +6,17 @@ use serde_json::Value;
 
 use crate::umap::{get_bool, get_f64, get_string, get_usize};
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct Config {
+    approx: Option<String>,
+    seed: Option<usize>,
+    verbose: Option<usize>,
+    perplexity : Option<f64>,
+    dim : Option<usize>
+}
+
 #[fn_info()]
-pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Option<&Value>) -> Option<Vec<Vec<f64>>>{
+pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Config) -> Option<Vec<Vec<f64>>> {
     if rows.len() < 2 {
         return None;
     }
@@ -18,25 +27,15 @@ pub(crate) fn tsne(rows: Vec<Vec<f64>>, config: Option<&Value>) -> Option<Vec<Ve
     }
 
     let data = Mat::from_fn(rows.len(), n_features, |i, j| rows[i][j]);
-    let config = config.and_then(Value::as_object);
-    let params = params_from_config(config);
-    let approx_type = config
-        .and_then(|config| get_string(config, &["approxType", "approx_type", "approximation"]))
-        .unwrap_or_else(|| "bh".to_string());
-    let seed = config
-        .and_then(|config| get_usize(config, &["seed"]))
-        .unwrap_or(42);
-    let verbose = config
-        .and_then(|config| get_usize(config, &["verbose"]))
-        .unwrap_or(0);
+    let approx_type = config.approx.unwrap_or_else(|| "bh".to_string());
+    let seed = config.seed.unwrap_or(42);
+    let verbose = config.verbose.unwrap_or(0);
 
-    let approx_type = normalise_approx_type(&approx_type);
-    let Some(approx_type) = approx_type.as_deref() else {
-        return None;
-    };
+    let mut params = TsneParams::new_default_2d(config.perplexity);
+    params.n_dim = config.dim.unwrap_or(params.n_dim);
 
     let Ok(embedding) =
-        manifolds_rs::tsne(data.as_ref(), None, &params, approx_type, seed, verbose)
+        manifolds_rs::tsne(data.as_ref(), None, &params, &approx_type, seed, verbose)
     else {
         return None;
     };
@@ -114,14 +113,4 @@ fn params_from_config(config: Option<&serde_json::Map<String, Value>>) -> TsnePa
     }
 
     params
-}
-
-fn normalise_approx_type(approx_type: &str) -> Option<String> {
-    match approx_type.to_ascii_lowercase().as_str() {
-        "bh" | "barnes hut" | "barnes_hut" | "barnes-hut" | "barneshut" => Some("bh".to_string()),
-        // This workspace does not enable manifolds-rs' fft_tsne feature. Passing
-        // fft would panic inside manifolds-rs, so treat it as an unsupported config.
-        "fft" => None,
-        _ => None,
-    }
 }

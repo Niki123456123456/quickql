@@ -37,20 +37,20 @@ pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
         Err(_) => return Value::Null,
     };
 
-    let tolerance = config
+    let eps = config
         .eps
         .unwrap_or(f64::MAX);
-    if !tolerance.is_finite() || tolerance <= 0.0 {
+    if !eps.is_finite() || eps <= 0.0 {
         return Value::Null;
     }
-    let cluster_tolerance = config
+    let cluster_eps = config
         .cluster_eps
-        .unwrap_or(tolerance);
-    if !cluster_tolerance.is_finite() || cluster_tolerance <= 0.0 {
+        .unwrap_or(eps);
+    if !cluster_eps.is_finite() || cluster_eps <= 0.0 {
         return Value::Null;
     }
 
-    let params = Optics::params(min_points).tolerance(tolerance);
+    let params = Optics::params(min_points).tolerance(eps);
 
     let Ok(analysis) = params.transform(observations.view()) else {
         return Value::Null;
@@ -65,9 +65,9 @@ pub(crate) fn optics(rows: Vec<Vec<f64>>, config: Config) -> Value {
             let core_distance = *sample.core_distance();
             let reachability_distance = *sample.reachability_distance();
             let starts_cluster =
-                core_distance.is_some_and(|distance| distance <= cluster_tolerance);
+                core_distance.is_some_and(|distance| distance <= cluster_eps);
             let cluster_index = if reachability_distance
-                .is_none_or(|distance| distance > cluster_tolerance)
+                .is_none_or(|distance| distance > cluster_eps)
                 || current_cluster.is_none()
             {
                 if starts_cluster {
