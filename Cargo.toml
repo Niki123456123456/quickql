@@ -3,7 +3,8 @@ members = [
   "crates/quickql-core",
   "crates/quickql-macros",
   "crates/ql-engine",
-  "crates/ql-lsp"
+  "crates/ql-lsp",
+  "crates/ql-webservice"
 ]
 resolver = "2"
 
@@ -14,6 +15,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
+axum = "0.7"
 base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
@@ -28,6 +30,7 @@ pest = "2.7"
 pest_derive = "2.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.10"
 proc-macro2 = "1.0"
 quote = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
