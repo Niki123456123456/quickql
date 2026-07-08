@@ -288,8 +288,31 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .toolbar-spacer {
+      flex: 1 1 auto;
+    }
+    .view-switch {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    .view-switch button {
+      border: 0;
+      border-radius: 0;
+      color: var(--fg);
+      background: transparent;
+      padding: 5px 10px;
+    }
+    .view-switch button.active {
+      color: #ffffff;
+      background: var(--accent);
+    }
     .table {
       position: relative;
+      grid-row: 3;
+      grid-column: 1;
       overflow: auto;
       min-height: 0;
       background: var(--bg);
@@ -330,6 +353,56 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     }
     .row { height: 28px; }
     .row:hover { background: var(--row-hover); }
+    .table.hidden {
+      display: none;
+    }
+    .graph {
+      display: none;
+      grid-row: 3;
+      grid-column: 1;
+      overflow: auto;
+      min-height: 0;
+      position: relative;
+      background: var(--bg);
+    }
+    .graph.active {
+      display: block;
+    }
+    #graphPlot {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 32px;
+      min-height: 100%;
+      padding: 8px;
+      width: 100%;
+    }
+    .graph-item {
+      flex: 0 0 auto;
+      height: min(760px, calc(100vh - 270px));
+      min-height: 420px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .graph-item-plot {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+    .graph-message {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .graph-message.active {
+      display: flex;
+    }
     .empty {
       padding: 18px;
       color: var(--muted);
@@ -350,6 +423,11 @@ MAP id, name</textarea>
       <strong id="source">No results</strong>
       <span id="rowCount">0 rows</span>
       <span id="elapsed">0.0 ms</span>
+      <span class="toolbar-spacer"></span>
+      <div class="view-switch" role="group" aria-label="Result view">
+        <button id="tableView" class="active" type="button" aria-pressed="true">Table</button>
+        <button id="graphView" type="button" aria-pressed="false">Graph</button>
+      </div>
     </div>
     <div id="table" class="table">
       <div id="empty" class="empty">Run a query to show results.</div>
@@ -358,7 +436,12 @@ MAP id, name</textarea>
         <div id="viewport" class="viewport"></div>
       </div>
     </div>
+    <div id="graph" class="graph">
+      <div id="graphPlot"></div>
+      <div id="graphMessage" class="graph-message"></div>
+    </div>
   </div>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" onerror="window.__plotlyLoadFailed = true"></script>
   <script>
     const form = document.getElementById('queryForm');
     const input = document.getElementById('queryInput');
@@ -372,17 +455,26 @@ MAP id, name</textarea>
     const spacer = document.getElementById('spacer');
     const header = document.getElementById('header');
     const viewport = document.getElementById('viewport');
+    const graph = document.getElementById('graph');
+    const graphPlot = document.getElementById('graphPlot');
+    const graphMessage = document.getElementById('graphMessage');
+    const tableView = document.getElementById('tableView');
+    const graphView = document.getElementById('graphView');
     const rowHeight = 28;
     let rows = [];
     let columns = [];
     let displayColumns = ['row'];
     let hasMetaColumns = false;
+    let activeView = 'table';
+    let graphRendered = false;
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
       await runQuery();
     });
     table.addEventListener('scroll', render);
+    tableView.addEventListener('click', () => setView('table'));
+    graphView.addEventListener('click', () => setView('graph'));
 
     async function runQuery() {
       setStatus('Running...', false);
@@ -411,6 +503,9 @@ MAP id, name</textarea>
       columns = Array.isArray(result.columns) ? result.columns : [];
       hasMetaColumns = columns.length > 0;
       displayColumns = hasMetaColumns ? columns : ['row'];
+      graphRendered = false;
+      graphPlot.innerHTML = '';
+      hideGraphMessage();
 
       sourceEl.textContent = result.source || 'Query';
       sourceEl.title = sourceEl.textContent;
@@ -423,7 +518,11 @@ MAP id, name</textarea>
       spacer.hidden = false;
       empty.hidden = rows.length > 0;
       table.scrollTop = 0;
-      render();
+      if (activeView === 'graph') {
+        renderGraph(rows);
+      } else {
+        render();
+      }
     }
 
     function render() {
@@ -443,6 +542,101 @@ MAP id, name</textarea>
           return '<div class="cell" title="' + escapeAttr(formatted) + '">' + escapeHtml(formatted) + '</div>';
         }).join('') + '</div>'
       ).join('');
+    }
+
+    function setView(view) {
+      activeView = view;
+      const isGraph = view === 'graph';
+      table.classList.toggle('hidden', isGraph);
+      graph.classList.toggle('active', isGraph);
+      tableView.classList.toggle('active', !isGraph);
+      graphView.classList.toggle('active', isGraph);
+      tableView.setAttribute('aria-pressed', String(!isGraph));
+      graphView.setAttribute('aria-pressed', String(isGraph));
+
+      if (isGraph) {
+        if (!graphRendered) {
+          renderGraph(rows);
+        } else if (window.Plotly) {
+          resizeGraphs();
+        }
+      } else {
+        render();
+      }
+    }
+
+    function renderGraph(resultRows) {
+      if (activeView !== 'graph') return;
+      if (!Array.isArray(resultRows) || resultRows.length === 0) {
+        showGraphMessage('No result rows available for graph view.');
+        return;
+      }
+
+      ensurePlotly(() => {
+        const specs = resultRows
+          .map(unwrapPlotSpec)
+          .filter(spec => spec && spec.data !== undefined);
+        if (specs.length === 0) {
+          showGraphMessage('At least one result row must contain a data field for Plotly.');
+          return;
+        }
+
+        try {
+          hideGraphMessage();
+          graphPlot.innerHTML = specs.map((_, index) =>
+            '<div class="graph-item"><div id="graphItem' + index + '" class="graph-item-plot"></div></div>'
+          ).join('');
+
+          specs.forEach((spec, index) => {
+            const item = document.getElementById('graphItem' + index);
+            const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {});
+            Plotly.newPlot(item, normalizePlotData(spec.data), spec.layout || {}, config);
+          });
+          graphRendered = true;
+        } catch (error) {
+          graphRendered = false;
+          showGraphMessage('Unable to render graph: ' + (error && error.message ? error.message : String(error)));
+        }
+      });
+    }
+
+    function ensurePlotly(callback) {
+      if (window.Plotly) {
+        callback();
+        return;
+      }
+      showGraphMessage(window.__plotlyLoadFailed ? 'Unable to load Plotly.' : 'Loading graph renderer...');
+    }
+
+    function unwrapPlotSpec(row) {
+      if (row && row.data !== undefined) return row;
+      const values = Object.values(row || {});
+      if (values.length === 1 && values[0] && typeof values[0] === 'object' && values[0].data !== undefined) {
+        return values[0];
+      }
+      return row;
+    }
+
+    function normalizePlotData(data) {
+      return Array.isArray(data) ? data : [data];
+    }
+
+    function resizeGraphs() {
+      graphPlot.querySelectorAll('.graph-item-plot').forEach(plot => {
+        Plotly.Plots.resize(plot);
+      });
+    }
+
+    function showGraphMessage(message) {
+      graphMessage.textContent = message;
+      graphMessage.classList.add('active');
+      graphPlot.style.visibility = 'hidden';
+    }
+
+    function hideGraphMessage() {
+      graphMessage.textContent = '';
+      graphMessage.classList.remove('active');
+      graphPlot.style.visibility = 'visible';
     }
 
     function setStatus(message, isError) {
