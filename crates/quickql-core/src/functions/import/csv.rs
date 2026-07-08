@@ -1,11 +1,11 @@
+use crate::FileProvider;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
-use std::fs::File;
-use std::io::Read;
+use std::io::Cursor;
 use std::path::Path;
 
-pub(crate) fn load_csv_source(path: &Path) -> Result<Value> {
-    let mut reader = csv_reader_from_path(path)?;
+pub(crate) fn load_csv_source(path: &Path, file_provider: &dyn FileProvider) -> Result<Value> {
+    let mut reader = csv_reader_from_path(path, file_provider)?;
     let columns: Vec<String> = reader
         .headers()
         .with_context(|| format!("Reading CSV headers {}", path.display()))?
@@ -32,8 +32,11 @@ pub(crate) fn load_csv_source(path: &Path) -> Result<Value> {
     Ok(Value::Array(rows))
 }
 
-pub(crate) fn csv_fields_from_source(source_path: &Path) -> Result<Vec<String>> {
-    let mut reader = csv_reader_from_path(source_path)?;
+pub(crate) fn csv_fields_from_source(
+    source_path: &Path,
+    file_provider: &dyn FileProvider,
+) -> Result<Vec<String>> {
+    let mut reader = csv_reader_from_path(source_path, file_provider)?;
     Ok(reader
         .headers()
         .with_context(|| format!("Reading CSV headers {}", source_path.display()))?
@@ -42,20 +45,17 @@ pub(crate) fn csv_fields_from_source(source_path: &Path) -> Result<Vec<String>> 
         .collect())
 }
 
-fn csv_reader_from_path(source_path: &Path) -> Result<csv::Reader<File>> {
-    let delimiter = csv_delimiter_from_path(source_path)?;
-    csv::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .from_path(source_path)
-        .with_context(|| format!("Opening CSV source {}", source_path.display()))
-}
-
-fn csv_delimiter_from_path(source_path: &Path) -> Result<u8> {
-    let mut file = File::open(source_path)
+fn csv_reader_from_path(
+    source_path: &Path,
+    file_provider: &dyn FileProvider,
+) -> Result<csv::Reader<Cursor<Vec<u8>>>> {
+    let bytes = file_provider
+        .read_bytes(source_path)
         .with_context(|| format!("Opening CSV source {}", source_path.display()))?;
-    let mut buffer = [0u8; 8192];
-    let bytes_read = file.read(&mut buffer)?;
-    Ok(detect_csv_delimiter(&buffer[..bytes_read]))
+    let delimiter = detect_csv_delimiter(&bytes[..bytes.len().min(8192)]);
+    Ok(csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .from_reader(Cursor::new(bytes)))
 }
 
 fn detect_csv_delimiter(sample: &[u8]) -> u8 {

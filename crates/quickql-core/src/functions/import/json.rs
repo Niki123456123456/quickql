@@ -1,9 +1,9 @@
+use crate::FileProvider;
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::BufReader;
+use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -11,11 +11,12 @@ use std::time::Duration;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_PAGES: usize = 1000;
 
-pub(crate) fn load_json_source(path: &Path) -> Result<Value> {
-    let file =
-        File::open(path).with_context(|| format!("Opening JSON source {}", path.display()))?;
+pub(crate) fn load_json_source(path: &Path, file_provider: &dyn FileProvider) -> Result<Value> {
+    let bytes = file_provider
+        .read_bytes(path)
+        .with_context(|| format!("Opening JSON source {}", path.display()))?;
     let value: Value =
-        serde_json::from_reader(BufReader::new(file)).context("Parsing JSON source")?;
+        serde_json::from_reader(Cursor::new(bytes)).context("Parsing JSON source")?;
     Ok(value)
 }
 

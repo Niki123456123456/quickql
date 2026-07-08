@@ -67,7 +67,12 @@ fn parse_map_config(pair: Pair<'_, Rule>) -> Result<Value> {
         .into_inner()
         .find(|p| p.as_rule() == Rule::json_object)
         .context("MAP config must be a JSON object")?;
-    let value = parse_json_object(object)?.caluculate(&Value::Null, Path::new(""), &mut Vec::new());
+    let value = parse_json_object(object)?.caluculate(
+        &Value::Null,
+        Path::new(""),
+        &mut Vec::new(),
+        &FsFileProvider,
+    );
     if !value.is_object() {
         bail!("MAP config must be a JSON object");
     }

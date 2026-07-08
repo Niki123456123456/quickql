@@ -2,15 +2,14 @@ use crate::csv::{csv_fields_from_source, load_csv_source};
 use crate::json::{load_json_http_source, load_json_source};
 use crate::parsing::{parse_query, parse_query_lenient};
 use crate::{
-    CaluculatedValue, KeyDescriptor, MapExpr, MapMany, MapStep, Query, QueryResult, SortDirection,
-    SortKey, StreamMessage, SubQuery, ALL_COLUMNS,
+    CaluculatedValue, FileProvider, FsFileProvider, KeyDescriptor, MapExpr, MapMany, MapStep,
+    Query, QueryResult, SortDirection, SortKey, StreamMessage, SubQuery, ALL_COLUMNS,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Mutex;
@@ -22,11 +21,21 @@ pub fn stream_query_jsonl<W: Write>(
     writer: &mut W,
     batch_size: usize,
 ) -> Result<()> {
+    stream_query_jsonl_with_provider(query_path, writer, batch_size, &FsFileProvider)
+}
+
+pub fn stream_query_jsonl_with_provider<W: Write>(
+    query_path: &Path,
+    writer: &mut W,
+    batch_size: usize,
+    file_provider: &dyn FileProvider,
+) -> Result<()> {
     let start = Instant::now();
-    let query_text = fs::read_to_string(query_path)
+    let query_text = file_provider
+        .read_to_string(query_path)
         .with_context(|| format!("Reading query file {}", query_path.display()))?;
     let query = parse_query(&query_text)?;
-    let result = execute_pipeline_streaming(&query, query_path, writer)
+    let result = execute_pipeline_streaming(&query, query_path, writer, file_provider)
         .with_context(|| format!("Executing pipeline {}", query_path.display()))?;
     let columns = columns_from_descriptor(&result.columns);
 
@@ -85,9 +94,10 @@ fn execute_pipeline_streaming<W: Write>(
     query: &Query,
     query_path: &Path,
     writer: &mut W,
+    file_provider: &dyn FileProvider,
 ) -> Result<QueryResult> {
     let mut ql_stack = Vec::new();
-    if let Ok(canonical) = fs::canonicalize(query_path) {
+    if let Ok(canonical) = file_provider.canonicalize(query_path) {
         ql_stack.push(canonical);
     }
 
@@ -112,6 +122,7 @@ fn execute_pipeline_streaming<W: Write>(
                 query_path,
                 sources,
                 &mut ql_stack,
+                file_provider,
                 &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
                 writer,
             )?,
@@ -120,6 +131,7 @@ fn execute_pipeline_streaming<W: Write>(
                 map,
                 query_path,
                 &mut ql_stack,
+                file_provider,
                 &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
                 writer,
             )?,
@@ -128,6 +140,7 @@ fn execute_pipeline_streaming<W: Write>(
                 filter,
                 query_path,
                 &mut ql_stack,
+                file_provider,
                 &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
                 writer,
             )?,
@@ -137,9 +150,14 @@ fn execute_pipeline_streaming<W: Write>(
                 &mut StepProgress::new(substep, total_substeps, substep_name, step_start),
                 writer,
             )?,
-            SubQuery::GroupBy { keys, mapping } => {
-                apply_group_by(result, keys, mapping, query_path, &mut ql_stack)?
-            }
+            SubQuery::GroupBy { keys, mapping } => apply_group_by(
+                result,
+                keys,
+                mapping,
+                query_path,
+                &mut ql_stack,
+                file_provider,
+            )?,
             SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
         };
 
@@ -253,29 +271,44 @@ pub fn source_path_for_query(query_path: &Path, query_text: &str) -> Result<Opti
 }
 
 pub fn json_fields_from_source_sample(source_path: &Path, max_rows: usize) -> Result<Vec<String>> {
+    json_fields_from_source_sample_with_provider(source_path, max_rows, &FsFileProvider)
+}
+
+fn json_fields_from_source_sample_with_provider(
+    source_path: &Path,
+    max_rows: usize,
+    file_provider: &dyn FileProvider,
+) -> Result<Vec<String>> {
     if is_csv_path(source_path) {
-        return csv_fields_from_source(source_path);
+        return csv_fields_from_source(source_path, file_provider);
     }
     if is_ql_path(source_path) {
-        return fields_from_ql_source(source_path);
+        return fields_from_ql_source(source_path, file_provider);
     }
 
-    let mut file = File::open(source_path)
-        .with_context(|| format!("Opening JSON source {}", source_path.display()))?;
     let sample_bytes = (max_rows.max(1) * 4096).clamp(64 * 1024, 1024 * 1024);
-    let mut buffer = vec![0u8; sample_bytes];
-    let read = file.read(&mut buffer)?;
-    buffer.truncate(read);
+    let mut buffer = file_provider
+        .read_bytes(source_path)
+        .with_context(|| format!("Opening JSON source {}", source_path.display()))?;
+    buffer.truncate(sample_bytes.min(buffer.len()));
     Ok(fields_from_json_prefix(&String::from_utf8_lossy(&buffer)))
 }
 
 pub fn fields_from_source_sample(source_path: &Path, max_rows: usize) -> Result<Vec<String>> {
+    fields_from_source_sample_with_provider(source_path, max_rows, &FsFileProvider)
+}
+
+fn fields_from_source_sample_with_provider(
+    source_path: &Path,
+    max_rows: usize,
+    file_provider: &dyn FileProvider,
+) -> Result<Vec<String>> {
     if is_csv_path(source_path) {
-        csv_fields_from_source(source_path)
+        csv_fields_from_source(source_path, file_provider)
     } else if is_ql_path(source_path) {
-        fields_from_ql_source(source_path)
+        fields_from_ql_source(source_path, file_provider)
     } else {
-        json_fields_from_source_sample(source_path, max_rows)
+        json_fields_from_source_sample_with_provider(source_path, max_rows, file_provider)
     }
 }
 
@@ -283,7 +316,8 @@ fn fields_from_sources(query_path: &Path, sources: &[String]) -> Result<Vec<Stri
     let mut fields = Vec::new();
     for source in sources {
         let source_path = resolve_source(query_path, source);
-        let source_fields = fields_from_source_sample(&source_path, 100)?;
+        let source_fields =
+            fields_from_source_sample_with_provider(&source_path, 100, &FsFileProvider)?;
         for field in source_fields {
             if !fields.contains(&field) {
                 fields.push(field);
@@ -297,17 +331,22 @@ fn execute_pipeline_with_stack(
     query: &Query,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> Result<QueryResult> {
     let mut result = QueryResult::default();
 
     for step in &query.steps {
         result = match step {
-            SubQuery::Source(sources) => load_sources(query_path, sources, ql_stack)?,
-            SubQuery::Map(map) => apply_map(result, map, query_path, ql_stack),
-            SubQuery::Filter(filter) => apply_filter(result, filter, query_path, ql_stack),
+            SubQuery::Source(sources) => {
+                load_sources(query_path, sources, ql_stack, file_provider)?
+            }
+            SubQuery::Map(map) => apply_map(result, map, query_path, ql_stack, file_provider),
+            SubQuery::Filter(filter) => {
+                apply_filter(result, filter, query_path, ql_stack, file_provider)
+            }
             SubQuery::MapMany(map_many) => apply_map_many(result, map_many)?,
             SubQuery::GroupBy { keys, mapping } => {
-                apply_group_by(result, keys, mapping, query_path, ql_stack)?
+                apply_group_by(result, keys, mapping, query_path, ql_stack, file_provider)?
             }
             SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
         };
@@ -321,6 +360,7 @@ fn apply_map(
     map: &MapStep,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> QueryResult {
     let mapping = &map.mapping;
     if mapping.len() == 1 && matches!(mapping[0], MapExpr::All) {
@@ -331,13 +371,20 @@ fn apply_map(
         let rows = result
             .rows
             .iter()
-            .map(|row| map_row(row, mapping, query_path, ql_stack))
+            .map(|row| map_row(row, mapping, query_path, ql_stack, file_provider))
             .collect();
 
         return QueryResult::new(rows);
     };
 
-    apply_map_parallel(result, mapping, query_path, ql_stack, parallelism)
+    apply_map_parallel(
+        result,
+        mapping,
+        query_path,
+        ql_stack,
+        file_provider,
+        parallelism,
+    )
 }
 
 fn apply_map_streaming<W: Write>(
@@ -345,6 +392,7 @@ fn apply_map_streaming<W: Write>(
     map: &MapStep,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
     progress: &mut StepProgress<'_>,
     writer: &mut W,
 ) -> Result<QueryResult> {
@@ -359,6 +407,7 @@ fn apply_map_streaming<W: Write>(
             mapping,
             query_path,
             ql_stack,
+            file_provider,
             parallelism,
             progress,
             writer,
@@ -368,7 +417,7 @@ fn apply_map_streaming<W: Write>(
     let total = result.rows.len();
     let mut rows = Vec::with_capacity(total);
     for (index, row) in result.rows.iter().enumerate() {
-        rows.push(map_row(row, mapping, query_path, ql_stack));
+        rows.push(map_row(row, mapping, query_path, ql_stack, file_provider));
         progress.update(writer, index + 1, total)?;
     }
 
@@ -380,6 +429,7 @@ fn apply_map_parallel(
     mapping: &[MapExpr],
     query_path: &Path,
     ql_stack: &[PathBuf],
+    file_provider: &dyn FileProvider,
     parallelism: usize,
 ) -> QueryResult {
     let row_count = result.rows.len();
@@ -395,7 +445,7 @@ fn apply_map_parallel(
                 };
 
                 let mut ql_stack = ql_stack.to_vec();
-                let mapped = map_row(&row, mapping, query_path, &mut ql_stack);
+                let mapped = map_row(&row, mapping, query_path, &mut ql_stack, file_provider);
                 output.lock().unwrap()[index] = Some(mapped);
             });
         }
@@ -416,6 +466,7 @@ fn apply_map_parallel_streaming<W: Write>(
     mapping: &[MapExpr],
     query_path: &Path,
     ql_stack: &[PathBuf],
+    file_provider: &dyn FileProvider,
     parallelism: usize,
     progress: &mut StepProgress<'_>,
     writer: &mut W,
@@ -434,7 +485,7 @@ fn apply_map_parallel_streaming<W: Write>(
                 };
 
                 let mut ql_stack = ql_stack.to_vec();
-                let mapped = map_row(&row, mapping, query_path, &mut ql_stack);
+                let mapped = map_row(&row, mapping, query_path, &mut ql_stack, file_provider);
                 output.lock().unwrap()[index] = Some(mapped);
                 completed.fetch_add(1, AtomicOrdering::Relaxed);
             });
@@ -480,6 +531,7 @@ fn map_row(
     mapping: &[MapExpr],
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> Value {
     let mut output = Value::Object(Map::new());
     for expr in mapping {
@@ -490,7 +542,7 @@ fn map_row(
                 }
             }
             MapExpr::Specific { column, value } => {
-                let value = value.caluculate(row, query_path, ql_stack);
+                let value = value.caluculate(row, query_path, ql_stack, file_provider);
                 assign_output(&mut output, column, value);
             }
         }
@@ -503,11 +555,12 @@ fn apply_filter(
     filter: &CaluculatedValue,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> QueryResult {
     let rows = result
         .rows
         .into_iter()
-        .filter(|row| value_truthy(&filter.caluculate(row, query_path, ql_stack)))
+        .filter(|row| value_truthy(&filter.caluculate(row, query_path, ql_stack, file_provider)))
         .collect();
     QueryResult::new(rows)
 }
@@ -517,13 +570,14 @@ fn apply_filter_streaming<W: Write>(
     filter: &CaluculatedValue,
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
     progress: &mut StepProgress<'_>,
     writer: &mut W,
 ) -> Result<QueryResult> {
     let total = result.rows.len();
     let mut rows = Vec::new();
     for (index, row) in result.rows.into_iter().enumerate() {
-        if value_truthy(&filter.caluculate(&row, query_path, ql_stack)) {
+        if value_truthy(&filter.caluculate(&row, query_path, ql_stack, file_provider)) {
             rows.push(row);
         }
         progress.update(writer, index + 1, total)?;
@@ -620,10 +674,11 @@ fn load_sources(
     query_path: &Path,
     sources: &[CaluculatedValue],
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> Result<QueryResult> {
     let mut rows = Vec::new();
     for source in sources {
-        let source = source.caluculate(&Value::Null, query_path, ql_stack);
+        let source = source.caluculate(&Value::Null, query_path, ql_stack, file_provider);
         if let Value::Array(array) = source {
             rows.extend(array);
         } else {
@@ -637,12 +692,13 @@ fn load_sources_streaming<W: Write>(
     query_path: &Path,
     sources: &[CaluculatedValue],
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
     progress: &mut StepProgress<'_>,
     writer: &mut W,
 ) -> Result<QueryResult> {
     let mut rows = Vec::new();
     for (index, source) in sources.iter().enumerate() {
-        let source = source.caluculate(&Value::Null, query_path, ql_stack);
+        let source = source.caluculate(&Value::Null, query_path, ql_stack, file_provider);
         if let Value::Array(array) = source {
             rows.extend(array);
         } else {
@@ -656,6 +712,7 @@ fn load_sources_streaming<W: Write>(
 pub fn load_query_source(
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
     source: &str,
     method: reqwest::Method,
     headers: HashMap<&str, &str>,
@@ -668,37 +725,43 @@ pub fn load_query_source(
 
     let source_path = resolve_source(query_path, source);
     if is_csv_path(&source_path) {
-        load_csv_source(&source_path)
+        load_csv_source(&source_path, file_provider)
     } else if is_ql_path(&source_path) {
-        let result = load_ql_source(&source_path, ql_stack)?;
+        let result = load_ql_source(&source_path, ql_stack, file_provider)?;
         return Ok(Value::Array(result.rows));
     } else {
-        load_json_source(&source_path)
+        load_json_source(&source_path, file_provider)
     }
 }
 
-fn load_ql_source(path: &Path, ql_stack: &mut Vec<PathBuf>) -> Result<QueryResult> {
-    let canonical = fs::canonicalize(path)
+fn load_ql_source(
+    path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
+) -> Result<QueryResult> {
+    let canonical = file_provider
+        .canonicalize(path)
         .with_context(|| format!("Resolving QL source {}", path.display()))?;
     if ql_stack.contains(&canonical) {
         bail!("Recursive QL source reference: {}", path.display());
     }
 
-    let query_text = fs::read_to_string(path)
+    let query_text = file_provider
+        .read_to_string(path)
         .with_context(|| format!("Reading QL source {}", path.display()))?;
     let query = parse_query(&query_text)
         .with_context(|| format!("Parsing QL source {}", path.display()))?;
 
     ql_stack.push(canonical);
-    let result = execute_pipeline_with_stack(&query, path, ql_stack)
+    let result = execute_pipeline_with_stack(&query, path, ql_stack, file_provider)
         .with_context(|| format!("Executing QL source {}", path.display()));
     ql_stack.pop();
     result
 }
 
-fn fields_from_ql_source(path: &Path) -> Result<Vec<String>> {
+fn fields_from_ql_source(path: &Path, file_provider: &dyn FileProvider) -> Result<Vec<String>> {
     let mut ql_stack = Vec::new();
-    let result = load_ql_source(path, &mut ql_stack)?;
+    let result = load_ql_source(path, &mut ql_stack, file_provider)?;
     Ok(columns_from_descriptor(&result.columns))
 }
 
@@ -708,6 +771,7 @@ fn apply_group_by(
     mapping: &[MapExpr],
     query_path: &Path,
     ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
 ) -> Result<QueryResult> {
     let group_all = keys.len() == 1 && keys[0] == ALL_COLUMNS;
     let key_paths: Vec<Vec<String>> = if group_all {
@@ -759,7 +823,7 @@ fn apply_group_by(
                     set_path(
                         &mut output,
                         column,
-                        value.caluculate(&group_value, query_path, ql_stack),
+                        value.caluculate(&group_value, query_path, ql_stack, file_provider),
                     );
                 }
             }

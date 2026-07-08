@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs, io,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
@@ -39,7 +40,7 @@ mod umap;
 
 pub use execution::{
     fields_from_source_sample, json_fields_for_query, json_fields_from_source_sample,
-    source_path_for_query, stream_query_jsonl,
+    source_path_for_query, stream_query_jsonl, stream_query_jsonl_with_provider,
 };
 pub use parsing::parse_query;
 
@@ -112,6 +113,7 @@ impl CaluculatedValue {
         value: &Value,
         query_path: &Path,
         ql_stack: &mut Vec<PathBuf>,
+        file_provider: &dyn FileProvider,
     ) -> Value {
         match self {
             CaluculatedValue::Reference(path) => path
@@ -132,14 +134,17 @@ impl CaluculatedValue {
             CaluculatedValue::Object(entries) => {
                 let mut output = serde_json::Map::new();
                 for (key, entry) in entries {
-                    output.insert(key.clone(), entry.caluculate(value, query_path, ql_stack));
+                    output.insert(
+                        key.clone(),
+                        entry.caluculate(value, query_path, ql_stack, file_provider),
+                    );
                 }
                 Value::Object(output)
             }
             CaluculatedValue::Array(entries) => Value::Array(
                 entries
                     .iter()
-                    .map(|entry| entry.caluculate(value, query_path, ql_stack))
+                    .map(|entry| entry.caluculate(value, query_path, ql_stack, file_provider))
                     .collect(),
             ),
             CaluculatedValue::FunctionCall {
@@ -148,12 +153,13 @@ impl CaluculatedValue {
             } => {
                 let values: Vec<_> = parameters
                     .iter()
-                    .map(|x| x.caluculate(value, query_path, ql_stack))
+                    .map(|x| x.caluculate(value, query_path, ql_stack, file_provider))
                     .collect();
 
                 let metaparams = MetaParameters {
                     query_path,
                     ql_stack,
+                    file_provider,
                 };
 
                 fn_info_for_call(function, &values)
@@ -167,6 +173,36 @@ impl CaluculatedValue {
 struct MetaParameters<'a> {
     query_path: &'a Path,
     ql_stack: &'a mut Vec<PathBuf>,
+    file_provider: &'a dyn FileProvider,
+}
+
+pub trait FileProvider: Sync {
+    fn read_to_string(&self, path: &Path) -> io::Result<String>;
+
+    fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.read_to_string(path).map(String::into_bytes)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        Ok(path.to_path_buf())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct FsFileProvider;
+
+impl FileProvider for FsFileProvider {
+    fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        fs::read_to_string(path)
+    }
+
+    fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
+        fs::read(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::canonicalize(path)
+    }
 }
 #[fn_info()]
 fn get(values: &[Value], params: MetaParameters) -> Value {
@@ -182,6 +218,7 @@ fn get(values: &[Value], params: MetaParameters) -> Value {
         values.first().unwrap_or_default(),
         params.query_path,
         params.ql_stack,
+        params.file_provider,
     )
 }
 #[fn_info()]
@@ -220,6 +257,7 @@ fn open_source(
             return execution::load_query_source(
                 params.query_path,
                 params.ql_stack,
+                params.file_provider,
                 &source,
                 method,
                 Default::default(),
@@ -238,6 +276,7 @@ fn open_source(
             return execution::load_query_source(
                 params.query_path,
                 params.ql_stack,
+                params.file_provider,
                 &config.src,
                 method,
                 headers,
@@ -353,9 +392,45 @@ fn normalized_function_name(function: &str) -> String {
 mod tests {
     use super::*;
     use std::{
-        fs,
+        fs, io,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    struct MemoryFileProvider {
+        path: PathBuf,
+        contents: String,
+    }
+
+    impl FileProvider for MemoryFileProvider {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            if path == self.path {
+                Ok(self.contents.clone())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "missing file"))
+            }
+        }
+
+        fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+            Ok(path.to_path_buf())
+        }
+    }
+
+    #[test]
+    fn stream_query_jsonl_accepts_provider_backed_query_file() {
+        let query_path = PathBuf::from("memory-query.ql");
+        let provider = MemoryFileProvider {
+            path: query_path.clone(),
+            contents: "SOURCE [{id: 1}, {id: 2}]\nMAP id".to_string(),
+        };
+        let mut output = Vec::new();
+
+        stream_query_jsonl_with_provider(&query_path, &mut output, 100, &provider).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#""type":"meta""#));
+        assert!(output.contains(r#""type":"batch""#));
+        assert!(output.contains(r#""rowCount":2"#));
+    }
 
     #[test]
     fn source_functions_load_with_meta_parameters() {
@@ -379,7 +454,7 @@ mod tests {
                     "rows.json".to_string(),
                 ))],
             }
-            .caluculate(&Value::Null, &query_path, &mut ql_stack);
+            .caluculate(&Value::Null, &query_path, &mut ql_stack, &FsFileProvider);
 
             assert_eq!(value, serde_json::json!([{ "id": 1 }]));
         }
@@ -407,7 +482,7 @@ mod tests {
                 "src": "rows.json"
             }))],
         }
-        .caluculate(&Value::Null, &query_path, &mut Vec::new());
+        .caluculate(&Value::Null, &query_path, &mut Vec::new(), &FsFileProvider);
 
         assert_eq!(value, serde_json::json!([{ "id": 2 }]));
 
@@ -424,7 +499,12 @@ mod tests {
                 CaluculatedValue::Static(Value::String("id".to_string())),
             ],
         }
-        .caluculate(&Value::Null, Path::new("query.ql"), &mut Vec::new());
+        .caluculate(
+            &Value::Null,
+            Path::new("query.ql"),
+            &mut Vec::new(),
+            &FsFileProvider,
+        );
 
         assert_eq!(value, serde_json::json!(1));
     }
