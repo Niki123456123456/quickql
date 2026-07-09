@@ -197,6 +197,10 @@ impl FileProvider for WebQueryFileProvider {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    for (key, value) in std::env::vars() {
+        println!("env: {key}");
+    }
+
     let cli = Cli::parse();
     let cwd = cli
         .cwd
@@ -381,14 +385,20 @@ async fn execute_git_query(config: Arc<GitLabConfig>, path: String) -> Result<Qu
     .await?
 }
 
+fn secret_var(name: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(name) {
+        return Some(value);
+    }
+    let secrets_path = std::env::var("SECRETS_PATH").ok()?;
+    std::fs::read_to_string(Path::new(&secrets_path).join(name))
+        .ok()
+        .map(|value| value.trim().to_string())
+}
+
 fn load_gitlab_config() -> Option<Result<GitLabConfig>> {
-    let path = std::env::var("QL_WEBSERVICE_GITLAB_PATH")
-        .or_else(|_| std::env::var("GITLAB_PATH"))
-        .ok();
+    let path = secret_var("QL_WEBSERVICE_GITLAB_PATH").or_else(|| secret_var("GITLAB_PATH"));
     println!("GitLab path: {:?}", path);
-    let token = std::env::var("QL_WEBSERVICE_GITLAB_TOKEN")
-        .or_else(|_| std::env::var("GITLAB_TOKEN"))
-        .ok();
+    let token = secret_var("QL_WEBSERVICE_GITLAB_TOKEN").or_else(|| secret_var("GITLAB_TOKEN"));
 
     match (path, token) {
         (None, None) => None,
