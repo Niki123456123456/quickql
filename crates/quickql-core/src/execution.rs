@@ -599,12 +599,7 @@ fn apply_map_many(result: QueryResult, map_many: &MapMany) -> Result<QueryResult
             Value::Array(values) if include_paths.is_empty() => rows.extend(values),
             Value::Array(values) => {
                 for value in values {
-                    let Value::Object(mut output) = value else {
-                        bail!(
-                            "MAP_MANY column '{}' must contain objects when INCLUDE is used, got {value}",
-                            map_many.field
-                        );
-                    };
+                    let mut output = map_many_output(value, &path);
 
                     for (_, include_path) in &include_paths {
                         set_path(&mut output, include_path, get_path(&row, include_path));
@@ -644,12 +639,7 @@ fn apply_map_many_streaming<W: Write>(
             Value::Array(values) if include_paths.is_empty() => rows.extend(values),
             Value::Array(values) => {
                 for value in values {
-                    let Value::Object(mut output) = value else {
-                        bail!(
-                            "MAP_MANY column '{}' must contain objects when INCLUDE is used, got {value}",
-                            map_many.field
-                        );
-                    };
+                    let mut output = map_many_output(value, &path);
 
                     for (_, include_path) in &include_paths {
                         set_path(&mut output, include_path, get_path(&row, include_path));
@@ -668,6 +658,17 @@ fn apply_map_many_streaming<W: Write>(
     }
 
     Ok(QueryResult::new(rows))
+}
+
+fn map_many_output(value: Value, default_path: &[String]) -> Map<String, Value> {
+    match value {
+        Value::Object(output) => output,
+        value => {
+            let mut output = Map::new();
+            set_path(&mut output, default_path, value);
+            output
+        }
+    }
 }
 
 fn load_sources(
@@ -1158,4 +1159,52 @@ fn is_ql_path(path: &Path) -> bool {
 
 fn is_http_uri(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn primitive_map_many_input() -> (QueryResult, MapMany) {
+        (
+            QueryResult::new(vec![json!({
+                "day": "2026-07-14",
+                "result": { "numbers": [1, 2] }
+            })]),
+            MapMany {
+                field: "result.numbers".to_string(),
+                include: vec!["day".to_string()],
+            },
+        )
+    }
+
+    fn assert_primitive_values_use_default_path(result: QueryResult) {
+        assert_eq!(
+            result.rows,
+            vec![
+                json!({ "result": { "numbers": 1 }, "day": "2026-07-14" }),
+                json!({ "result": { "numbers": 2 }, "day": "2026-07-14" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn map_many_wraps_primitive_values_at_default_path_when_including_columns() {
+        let (result, map_many) = primitive_map_many_input();
+
+        assert_primitive_values_use_default_path(apply_map_many(result, &map_many).unwrap());
+    }
+
+    #[test]
+    fn streaming_map_many_wraps_primitive_values_at_default_path_when_including_columns() {
+        let (result, map_many) = primitive_map_many_input();
+        let mut progress = StepProgress::new(1, 1, "MAP_MANY", Instant::now());
+        let mut writer = Vec::new();
+
+        let result =
+            apply_map_many_streaming(result, &map_many, &mut progress, &mut writer).unwrap();
+
+        assert_primitive_values_use_default_path(result);
+    }
 }
