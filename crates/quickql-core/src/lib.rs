@@ -234,6 +234,11 @@ fn put(value: OneOf<String, SourceConfig>, params: MetaParameters) -> Value {
     open_source(value, reqwest::Method::PUT, params)
 }
 
+#[fn_info()]
+fn head(value: OneOf<String, SourceConfig>, params: MetaParameters) -> Value {
+    open_source(value, reqwest::Method::HEAD, params)
+}
+
 enum OneOf<A, B> {
     A(A),
     B(B),
@@ -372,6 +377,7 @@ fn source_infos() -> Vec<FnInfo> {
         open_info(),
         post_info(),
         put_info(),
+        head_info(),
     ]
 }
 

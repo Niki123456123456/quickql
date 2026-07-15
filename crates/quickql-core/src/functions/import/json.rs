@@ -153,14 +153,28 @@ fn send_json_request(
         request = request.json(body);
     }
 
-    let value: Value = request
+    let response = request
         .send()
-        .with_context(|| format!("{method_label} JSON source {uri}"))?
-        //.error_for_status()
-        //.with_context(|| format!("{method_label} JSON source {uri} returned an error status"))?
-        .json()
-        .with_context(|| format!("Parsing JSON response from {uri}"))?;
-    Ok(value)
+        .with_context(|| format!("{method_label} JSON source {uri}"))?;
+    let response_status = response.status();
+    let response_body = response
+        .bytes()
+        .with_context(|| format!("Reading response from {uri}"))?;
+
+    parse_json_response(&response_body, response_status, uri)
+}
+
+fn parse_json_response(
+    response_body: &[u8],
+    response_status: reqwest::StatusCode,
+    uri: &str,
+) -> Result<Value> {
+    if response_body.is_empty() {
+        return Ok(serde_json::json!({ "status": response_status.as_u16() }));
+    }
+
+    serde_json::from_slice(response_body)
+        .with_context(|| format!("Parsing JSON response from {uri}"))
 }
 
 #[derive(Debug, Clone)]
@@ -334,5 +348,17 @@ fn merge_page(result: &mut Value, page: Value) {
             }
         }
         (result, page) => *result = page,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_json_response_uses_response_status_as_value() {
+        let value = parse_json_response(&[], reqwest::StatusCode::NO_CONTENT, "test-uri").unwrap();
+
+        assert_eq!(value, serde_json::json!({ "status": 204 }));
     }
 }
