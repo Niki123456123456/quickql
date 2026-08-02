@@ -98,6 +98,7 @@ pub enum MapExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaluculatedValue {
     Reference(Vec<String>),
+    Secret(String),
     Static(Value),
     Object(Vec<(String, CaluculatedValue)>),
     Array(Vec<CaluculatedValue>),
@@ -130,6 +131,9 @@ impl CaluculatedValue {
                 })
                 .cloned()
                 .unwrap_or(Value::Null),
+            CaluculatedValue::Secret(name) => {
+                secret_var(name).map(Value::String).unwrap_or(Value::Null)
+            }
             CaluculatedValue::Static(value) => value.clone(),
             CaluculatedValue::Object(entries) => {
                 let mut output = serde_json::Map::new();
@@ -203,6 +207,18 @@ impl FileProvider for FsFileProvider {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         fs::canonicalize(path)
     }
+}
+
+/// Reads a secret from the process environment or from a file below
+/// `SECRETS_PATH`, matching the webservice's secret lookup behavior.
+pub fn secret_var(name: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(name) {
+        return Some(value);
+    }
+    let secrets_path = std::env::var("SECRETS_PATH").ok()?;
+    fs::read_to_string(Path::new(&secrets_path).join(name))
+        .ok()
+        .map(|value| value.trim().to_string())
 }
 #[fn_info()]
 fn get(values: &[Value], params: MetaParameters) -> Value {
@@ -436,6 +452,44 @@ mod tests {
         assert!(output.contains(r#""type":"meta""#));
         assert!(output.contains(r#""type":"batch""#));
         assert!(output.contains(r#""rowCount":2"#));
+    }
+
+    #[test]
+    fn parses_secret_keys_as_distinct_values() {
+        let query = parse_query("SOURCE OPEN(@API_URL)\nMAP token = @API_TOKEN").unwrap();
+
+        assert_eq!(
+            query.steps,
+            vec![
+                SubQuery::Source(vec![CaluculatedValue::FunctionCall {
+                    function: "OPEN".to_string(),
+                    parameters: vec![CaluculatedValue::Secret("API_URL".to_string())],
+                }]),
+                SubQuery::Map(MapStep {
+                    config: Value::Object(Default::default()),
+                    mapping: vec![MapExpr::Specific {
+                        column: vec!["token".to_string()],
+                        value: CaluculatedValue::Secret("API_TOKEN".to_string()),
+                    }],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn evaluates_secret_keys_from_environment() {
+        let name = format!("QUICKQL_TEST_SECRET_{}", std::process::id());
+        std::env::set_var(&name, "secret value");
+
+        let value = CaluculatedValue::Secret(name.clone()).caluculate(
+            &Value::Null,
+            Path::new("query.ql"),
+            &mut Vec::new(),
+            &FsFileProvider,
+        );
+
+        std::env::remove_var(name);
+        assert_eq!(value, Value::String("secret value".to_string()));
     }
 
     #[test]

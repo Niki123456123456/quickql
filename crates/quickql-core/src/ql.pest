@@ -27,7 +27,7 @@ sort_direction = @{ (^"ASC" | ^"DESC") ~ !(ASCII_ALPHANUMERIC | "_") }
 
 assignment = { identifier ~ hspace* ~ "=" ~ hspace* ~ value }
 
-value         = { function_call | json_object | json_array | quoted_string | bool_literal | number | identifier }
+value         = { function_call | json_object | json_array | quoted_string | bool_literal | number | secret_key | identifier }
 function_call = { ident ~ hspace* ~ "(" ~ hspace* ~ function_args? ~ hspace* ~ ")" }
 function_args = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
 
@@ -40,6 +40,7 @@ bool_literal = @{ (^"true" | ^"false") ~ !(ASCII_ALPHANUMERIC | "_") }
 number       = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 identifier = @{ ident ~ ("." ~ ident)* }
+secret_key = @{ "@" ~ ident ~ ("." ~ ident)* }
 ident      = @{ "$" | (ASCII_ALPHANUMERIC | "_")+ }
 all_columns = @{ "*" }
 

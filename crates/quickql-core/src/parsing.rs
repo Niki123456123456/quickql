@@ -242,6 +242,9 @@ fn parse_value(pair: Pair<'_, Rule>) -> Result<CaluculatedValue> {
             Ok(CaluculatedValue::Static(Value::Bool(b)))
         }
         Rule::number => parse_number(inner.as_str()),
+        Rule::secret_key => Ok(CaluculatedValue::Secret(
+            inner.as_str().trim_start_matches('@').to_string(),
+        )),
         Rule::identifier => Ok(CaluculatedValue::Reference(path_parts(inner.as_str()))),
         rule => bail!("Unsupported value type: {rule:?}"),
     }

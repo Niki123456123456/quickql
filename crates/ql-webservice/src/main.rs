@@ -10,7 +10,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use quickql_core::FileProvider;
+use quickql_core::{secret_var, FileProvider};
 use reqwest::blocking::Client;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -383,16 +383,6 @@ async fn execute_git_query(config: Arc<GitLabConfig>, path: String) -> Result<Qu
         Ok(response)
     })
     .await?
-}
-
-fn secret_var(name: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(name) {
-        return Some(value);
-    }
-    let secrets_path = std::env::var("SECRETS_PATH").ok()?;
-    std::fs::read_to_string(Path::new(&secrets_path).join(name))
-        .ok()
-        .map(|value| value.trim().to_string())
 }
 
 fn load_gitlab_config() -> Option<Result<GitLabConfig>> {

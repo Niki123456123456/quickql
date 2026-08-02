@@ -134,6 +134,7 @@ See [docs/functions.md](docs/functions.md) for full details and examples.
 ## Values and Expressions
 
 - **Field reference**: `name`, `address.city` (dot-notation for nested fields)
+- **Secret reference**: `@API_TOKEN` (resolved at runtime)
 - **String**: `'hello'` or `"hello"`
 - **Number**: `42`, `-3.14`
 - **Boolean**: `true`, `false`
@@ -142,6 +143,10 @@ See [docs/functions.md](docs/functions.md) for full details and examples.
 - **Function call**: `SUM(amount)`
 
 See [docs/values-and-expressions.md](docs/values-and-expressions.md) for full details.
+
+When a query is run from the VS Code extension, secret references are loaded from
+the current process environment or a `.env` file in the query's workspace folder.
+Process environment values take precedence over `.env` values.
 
 ## Development
 

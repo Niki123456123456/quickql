@@ -15,6 +15,10 @@
       "match": "\\b\\d+(?:\\.\\d+)?\\b"
     },
     {
+      "name": "variable.other.secret.ql",
+      "match": "@[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*"
+    },
+    {
       "name": "comment.line.double-dash.ql",
       "match": "--.*$"
     }

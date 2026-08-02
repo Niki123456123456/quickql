@@ -76,7 +76,8 @@ async function runActiveQuery(context: vscode.ExtensionContext): Promise<void> {
     },
     async () => {
       await vscode.commands.executeCommand('quickql.results.focus');
-      const result = await runEngine(engine, editor.document.uri.fsPath, cwd, pageSize, progress => {
+      const secrets = workspaceFolder ? readWorkspaceEnv(workspaceFolder.uri.fsPath) : {};
+      const result = await runEngine(engine, editor.document.uri.fsPath, cwd, pageSize, secrets, progress => {
         resultsProvider.setProgress(progress);
       });
       resultsProvider.setResult(result);
@@ -131,10 +132,14 @@ function runEngine(
   queryPath: string,
   cwd: string,
   pageSize: number,
+  secrets: NodeJS.ProcessEnv,
   onProgress: (progress: QueryProgress) => void
 ): Promise<QueryResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(engine, ['stream', '--query', queryPath, '--batch-size', String(pageSize)], { cwd });
+    const child = spawn(engine, ['stream', '--query', queryPath, '--batch-size', String(pageSize)], {
+      cwd,
+      env: { ...secrets, ...process.env }
+    });
     let stderr = '';
     let stdoutBuffer = '';
     let settled = false;
@@ -236,6 +241,57 @@ function runEngine(
       rowCount += 1;
     }
   });
+}
+
+function readWorkspaceEnv(workspacePath: string): NodeJS.ProcessEnv {
+  const envPath = path.join(workspacePath, '.env');
+  let contents: string;
+  try {
+    contents = fs.readFileSync(envPath, 'utf8');
+  } catch (error) {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code !== 'ENOENT') {
+      void vscode.window.showWarningMessage(`Could not read ${envPath}: ${fsError.message}`);
+    }
+    return {};
+  }
+
+  const values: NodeJS.ProcessEnv = {};
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) {
+      continue;
+    }
+
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+
+    values[match[1]] = parseEnvValue(match[2]);
+  }
+  return values;
+}
+
+function parseEnvValue(rawValue: string): string {
+  if (rawValue.startsWith('"')) {
+    const closingQuote = rawValue.lastIndexOf('"');
+    if (closingQuote > 0) {
+      return rawValue.slice(1, closingQuote)
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+  if (rawValue.startsWith("'")) {
+    const closingQuote = rawValue.lastIndexOf("'");
+    if (closingQuote > 0) {
+      return rawValue.slice(1, closingQuote);
+    }
+  }
+  return rawValue.replace(/\s+#.*$/, '').trim();
 }
 
 function startLanguageServer(context: vscode.ExtensionContext): void {

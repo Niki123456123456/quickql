@@ -29,6 +29,24 @@ SOURCE OPEN('users.json')
 MAP id, city = address.city, row = $
 ```
 
+## Secret references
+
+Prefix a name with `@` to resolve a secret at runtime instead of reading a field
+from the current row:
+
+```ql
+SOURCE GET({
+  src: 'https://api.example.com/items',
+  headers: {Authorization: CONCAT('Bearer ', @API_TOKEN)}
+})
+```
+
+QuickQL first checks the process environment, then checks for a file with the
+secret's name below `SECRETS_PATH`. If a secret is unavailable, its value is
+`null`. The VS Code extension also reads `.env` from the `.ql` file's workspace
+folder whenever a query runs; existing process environment values take
+precedence.
+
 ---
 
 ## String literals
