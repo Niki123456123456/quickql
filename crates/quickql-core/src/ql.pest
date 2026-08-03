@@ -41,7 +41,7 @@ number       = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 identifier = @{ ident ~ ("." ~ ident)* }
 secret_key = @{ "@" ~ ident ~ ("." ~ ident)* }
-ident      = @{ "$" | (ASCII_ALPHANUMERIC | "_")+ }
+ident      = @{ "$" | (ASCII_ALPHANUMERIC | "_"| "-")+ }
 all_columns = @{ "*" }
 
 single_quoted_string = @{ "'" ~ ( "\\'" | !("'" | NEWLINE) ~ ANY )* ~ "'" }
