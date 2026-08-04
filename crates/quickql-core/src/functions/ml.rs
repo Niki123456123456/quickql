@@ -9,6 +9,8 @@ pub(crate) fn infos() -> Vec<FnInfo> {
         softmax_info(),
         entropy_info(),
         l2_info(),
+        random_info(),
+        nn2_info(),
         nn_info(),
         crate::tsne::tsne_info(),
         crate::optics::optics_info(),
@@ -44,6 +46,69 @@ fn entropy(values: &Vec<f64>) -> f64 {
 #[fn_info()]
 fn l2(values: &Vec<f64>) -> f64 {
     values.iter().map(|value| value * value).sum::<f64>().sqrt()
+}
+
+#[fn_info()]
+fn random() -> f64 {
+    rand::random()
+}
+
+// k-nearest-neighbor
+#[fn_info()]
+fn nn2(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize) -> Value {
+    if rows.is_empty() || neighbors.is_empty() || k == 0 {
+        return Value::Null;
+    }
+
+    let n_features = rows[0].len();
+    if n_features == 0
+        || rows
+            .iter()
+            .any(|row| row.len() != n_features || row.iter().any(|value| !value.is_finite()))
+        || neighbors
+            .iter()
+            .any(|row| row.len() != n_features || row.iter().any(|value| !value.is_finite()))
+    {
+        return Value::Null;
+    }
+
+    let neighbor_count = k.min(neighbors.len());
+    let mut indices = Vec::with_capacity(rows.len());
+    let mut distances = Vec::with_capacity(rows.len());
+
+    for row in &rows {
+        let mut matches = neighbors
+            .iter()
+            .enumerate()
+            .map(|(index, neighbor)| (euclidean_distance(row, neighbor), index))
+            .collect::<Vec<_>>();
+
+        matches.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        matches.truncate(neighbor_count);
+
+        distances.push(
+            matches
+                .iter()
+                .map(|(distance, _)| *distance)
+                .collect::<Vec<_>>(),
+        );
+        indices.push(matches.iter().map(|(_, index)| *index).collect::<Vec<_>>());
+    }
+
+    serde_json::json!({
+        "distance": distances,
+        "index": indices,
+    })
+}
+
+fn euclidean_distance(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right)
+        .fold(0.0, |distance, (left, right)| distance.hypot(left - right))
 }
 
 // k-nearest-neighbor
@@ -124,3 +189,45 @@ fn l2_distance(left: ArrayView1<'_, f64>, right: ArrayView1<'_, f64>) -> f64 {
         .sqrt()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{nn2, random};
+    use serde_json::{json, Value};
+
+    #[test]
+    fn nn2_returns_nearest_neighbors_in_distance_order() {
+        let result = nn2(
+            vec![vec![0.0, 0.0], vec![10.0, 10.0]],
+            vec![vec![3.0, 4.0], vec![0.0, 1.0], vec![10.0, 9.0]],
+            2,
+        );
+
+        assert_eq!(result["index"], json!([[1, 0], [2, 0]]));
+        assert_eq!(result["distance"][0], json!([1.0, 5.0]));
+        assert_eq!(result["distance"][1][0], json!(1.0));
+    }
+
+    #[test]
+    fn nn2_caps_k_and_breaks_distance_ties_by_index() {
+        let result = nn2(vec![vec![0.0]], vec![vec![1.0], vec![-1.0], vec![2.0]], 10);
+
+        assert_eq!(result["index"], json!([[0, 1, 2]]));
+        assert_eq!(result["distance"], json!([[1.0, 1.0, 2.0]]));
+    }
+
+    #[test]
+    fn nn2_rejects_invalid_input() {
+        assert_eq!(nn2(Vec::new(), vec![vec![1.0]], 1), Value::Null);
+        assert_eq!(nn2(vec![vec![1.0]], vec![vec![1.0]], 0), Value::Null);
+        assert_eq!(nn2(vec![vec![1.0, 2.0]], vec![vec![1.0]], 1), Value::Null);
+        assert_eq!(nn2(vec![vec![f64::NAN]], vec![vec![1.0]], 1), Value::Null);
+    }
+
+    #[test]
+    fn random_returns_a_value_between_zero_and_one() {
+        for _ in 0..100 {
+            let value = random();
+            assert!((0.0..1.0).contains(&value));
+        }
+    }
+}

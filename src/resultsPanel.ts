@@ -222,6 +222,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const columns = JSON.stringify(result.columns);
     const rowCount = JSON.stringify(result.rowCount);
     const pageSize = result.pageSize;
+    const graphFileBaseName = JSON.stringify(this.resultFileBaseName(result.source));
     const renderedColumnCount = Math.max(result.columns.length, 1);
     const elapsed = Number.isFinite(result.elapsedMs) ? result.elapsedMs.toFixed(1) : '0.0';
     const plotlyScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(
@@ -430,6 +431,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
     const displayColumns = hasMetaColumns ? columns : ['row'];
     const rowCount = ${rowCount};
     const pageSize = ${pageSize};
+    const graphFileBaseName = ${graphFileBaseName};
     const rowHeight = 28;
     const table = document.getElementById('table');
     const header = document.getElementById('header');
@@ -553,7 +555,15 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
         specs.forEach((spec, index) => {
           const item = document.getElementById('graphItem' + index);
-          const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {});
+          const configuredImageOptions = spec.config && spec.config.toImageButtonOptions
+            ? spec.config.toImageButtonOptions
+            : {};
+          const config = Object.assign({ responsive: true, displaylogo: false }, spec.config || {}, {
+            toImageButtonOptions: Object.assign({}, configuredImageOptions, {
+              format: 'svg',
+              filename: graphFileBaseName + (specs.length > 1 ? '-' + (index + 1) : '')
+            })
+          });
           Plotly.newPlot(item, normalizePlotData(spec.data), spec.layout || {}, config);
         });
         graphRendered = true;
