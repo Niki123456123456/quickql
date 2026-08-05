@@ -12,6 +12,7 @@ pub(crate) fn infos() -> Vec<FnInfo> {
         random_info(),
         nn2_info(),
         nn_info(),
+        subtract_info(),
         crate::tsne::tsne_info(),
         crate::optics::optics_info(),
         crate::umap::umap_info(),
@@ -51,6 +52,11 @@ fn l2(values: &Vec<f64>) -> f64 {
 #[fn_info()]
 fn random() -> f64 {
     rand::random()
+}
+
+#[fn_info()]
+fn subtract(a: f64, b : f64)-> f64{
+    a - b
 }
 
 // k-nearest-neighbor
