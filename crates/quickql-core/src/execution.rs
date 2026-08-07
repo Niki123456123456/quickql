@@ -1280,8 +1280,8 @@ mod tests {
     #[test]
     fn streaming_nn_reports_function_progress() {
         let result = QueryResult::new(vec![json!({
-            "rows": [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]],
-            "neighbors": [[0.0, 1.0], [2.0, 1.0]],
+            "rows": [[10.0, 0.0]],
+            "neighbors": [[1.0, 0.0], [9.0, 1.0]],
         })]);
         let map = MapStep {
             config: Value::Object(Map::new()),
@@ -1293,6 +1293,7 @@ mod tests {
                         CaluculatedValue::Reference(vec!["rows".to_string()]),
                         CaluculatedValue::Reference(vec!["neighbors".to_string()]),
                         CaluculatedValue::Static(json!(1)),
+                        CaluculatedValue::Static(json!("cosine")),
                     ],
                 },
             }],
@@ -1300,7 +1301,7 @@ mod tests {
         let mut progress = StepProgress::new(2, 3, "Map", Instant::now());
         let mut writer = Vec::new();
 
-        apply_map_streaming(
+        let result = apply_map_streaming(
             result,
             &map,
             Path::new("query.ql"),
@@ -1310,6 +1311,9 @@ mod tests {
             &mut writer,
         )
         .unwrap();
+
+        assert_eq!(result.rows[0]["nearest"]["index"], json!([[0]]));
+        assert_eq!(result.rows[0]["nearest"]["distance"], json!([[0.0]]));
 
         let messages = String::from_utf8(writer).unwrap();
         assert!(messages.lines().any(|line| {

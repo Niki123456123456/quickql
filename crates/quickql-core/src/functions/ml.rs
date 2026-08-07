@@ -1,6 +1,9 @@
 use crate::{FnInfo, MetaParameters};
-use linfa_nn::{distance::L2Dist, CommonNearestNeighbour, NearestNeighbour};
-use ndarray::{Array2, ArrayView1};
+use linfa_nn::{
+    distance::{Distance, L2Dist},
+    CommonNearestNeighbour, NearestNeighbour,
+};
+use ndarray::{Array2, ArrayView, ArrayView1, Dimension};
 use quickql_macros::fn_info;
 use serde_json::Value;
 
@@ -117,12 +120,23 @@ fn euclidean_distance(left: &[f64], right: &[f64]) -> f64 {
         .fold(0.0, |distance, (left, right)| distance.hypot(left - right))
 }
 
+
 // k-nearest-neighbor
 #[fn_info()]
-fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize, params: MetaParameters) -> Value {
+fn nn(
+    rows: Vec<Vec<f64>>,
+    neighbors: Vec<Vec<f64>>,
+    k: usize,
+    distance: Option<&Value>,
+    params: MetaParameters,
+) -> Value {
     if rows.is_empty() || neighbors.is_empty() || k == 0 {
         return Value::Null;
     }
+
+    let Some(distance) = DistanceMetric::parse(distance) else {
+        return Value::Null;
+    };
 
     let n_features = rows[0].len();
     if n_features == 0
@@ -152,7 +166,13 @@ fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize, params: MetaParam
         Err(_) => return Value::Null,
     };
 
-    let Ok(index) = CommonNearestNeighbour::KdTree.from_batch(&observations, L2Dist) else {
+    let index = match distance {
+        DistanceMetric::L2 => CommonNearestNeighbour::KdTree.from_batch(&observations, L2Dist),
+        DistanceMetric::Cosine => {
+            CommonNearestNeighbour::LinearSearch.from_batch(&observations, CosineDist)
+        }
+    };
+    let Ok(index) = index else {
         return Value::Null;
     };
 
@@ -174,7 +194,7 @@ fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize, params: MetaParam
         distances.push(
             matches
                 .iter()
-                .map(|(neighbor, _)| l2_distance(query, *neighbor))
+                .map(|(neighbor, _)| distance.distance(query, *neighbor))
                 .collect::<Vec<_>>(),
         );
         params.progress.report("NN", query_index + 1, total);
@@ -186,20 +206,64 @@ fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize, params: MetaParam
     })
 }
 
-fn l2_distance(left: ArrayView1<'_, f64>, right: ArrayView1<'_, f64>) -> f64 {
-    left.iter()
-        .zip(right.iter())
-        .map(|(left, right)| {
-            let difference = left - right;
-            difference * difference
-        })
-        .sum::<f64>()
-        .sqrt()
+#[derive(Clone, Copy)]
+enum DistanceMetric {
+    L2,
+    Cosine,
+}
+
+impl DistanceMetric {
+    fn parse(value: Option<&Value>) -> Option<Self> {
+        match value {
+            None | Some(Value::Null) => Some(Self::L2),
+            Some(Value::String(value)) if value.eq_ignore_ascii_case("l2") => Some(Self::L2),
+            Some(Value::String(value)) if value.eq_ignore_ascii_case("euclidean") => Some(Self::L2),
+            Some(Value::String(value)) if value.eq_ignore_ascii_case("cosine") => {
+                Some(Self::Cosine)
+            }
+            _ => None,
+        }
+    }
+
+    fn distance(self, left: ArrayView1<'_, f64>, right: ArrayView1<'_, f64>) -> f64 {
+        match self {
+            Self::L2 => L2Dist.distance(left, right),
+            Self::Cosine => CosineDist.distance(left, right),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CosineDist;
+
+impl Distance<f64> for CosineDist {
+    fn distance<D: Dimension>(
+        &self,
+        left: ArrayView<'_, f64, D>,
+        right: ArrayView<'_, f64, D>,
+    ) -> f64 {
+        let (dot_product, left_norm, right_norm) = left.iter().zip(right.iter()).fold(
+            (0.0, 0.0, 0.0),
+            |(dot_product, left_norm, right_norm), (left, right)| {
+                (
+                    dot_product + left * right,
+                    left_norm + left * left,
+                    right_norm + right * right,
+                )
+            },
+        );
+
+        if left_norm == 0.0 || right_norm == 0.0 {
+            return 1.0;
+        }
+
+        1.0 - (dot_product / (left_norm.sqrt() * right_norm.sqrt())).clamp(-1.0, 1.0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{nn2, random};
+    use super::{nn2, random, DistanceMetric};
     use serde_json::{json, Value};
 
     #[test]
@@ -237,5 +301,22 @@ mod tests {
             let value = random();
             assert!((0.0..1.0).contains(&value));
         }
+    }
+
+    #[test]
+    fn distance_metric_accepts_supported_names_and_rejects_unknown_names() {
+        assert!(matches!(
+            DistanceMetric::parse(None),
+            Some(DistanceMetric::L2)
+        ));
+        assert!(matches!(
+            DistanceMetric::parse(Some(&json!("Euclidean"))),
+            Some(DistanceMetric::L2)
+        ));
+        assert!(matches!(
+            DistanceMetric::parse(Some(&json!("COSINE"))),
+            Some(DistanceMetric::Cosine)
+        ));
+        assert!(DistanceMetric::parse(Some(&json!("manhattan"))).is_none());
     }
 }
