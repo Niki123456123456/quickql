@@ -2,8 +2,9 @@ use crate::csv::{csv_fields_from_source, load_csv_source};
 use crate::json::{load_json_http_source, load_json_source};
 use crate::parsing::{parse_query, parse_query_lenient};
 use crate::{
-    CaluculatedValue, FileProvider, FsFileProvider, KeyDescriptor, MapExpr, MapMany, MapStep,
-    Query, QueryResult, SortDirection, SortKey, StreamMessage, SubQuery, ALL_COLUMNS,
+    CaluculatedValue, FileProvider, FsFileProvider, FunctionProgressReporter, KeyDescriptor,
+    MapExpr, MapMany, MapStep, Query, QueryResult, SortDirection, SortKey, StreamMessage, SubQuery,
+    ALL_COLUMNS,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
@@ -204,6 +205,10 @@ impl<'a> StepProgress<'a> {
         }
 
         let percent = ((completed as f64 / total as f64) * 100.0).clamp(0.0, 100.0);
+        self.update_percent(writer, percent, self.substep_name)
+    }
+
+    fn update_percent<W: Write>(&mut self, writer: &mut W, percent: f64, name: &str) -> Result<()> {
         if percent < 100.0 && percent < self.last_percent + 1.0 {
             return Ok(());
         }
@@ -213,10 +218,33 @@ impl<'a> StepProgress<'a> {
             writer,
             self.substep,
             self.total_substeps,
-            self.substep_name,
+            name,
             percent,
             self.started_at,
         )
+    }
+}
+
+struct StepFunctionProgress<'progress, 'name, W> {
+    step: &'progress mut StepProgress<'name>,
+    writer: &'progress mut W,
+    completed_rows: usize,
+    total_rows: usize,
+    error: Option<anyhow::Error>,
+}
+
+impl<W: Write> FunctionProgressReporter for StepFunctionProgress<'_, '_, W> {
+    fn report(&mut self, name: &str, completed: usize, total: usize) {
+        if total == 0 || self.total_rows == 0 || self.error.is_some() {
+            return;
+        }
+
+        let row_fraction = (completed as f64 / total as f64).clamp(0.0, 1.0);
+        let percent =
+            ((self.completed_rows as f64 + row_fraction) / self.total_rows as f64) * 100.0;
+        if let Err(error) = self.step.update_percent(self.writer, percent, name) {
+            self.error = Some(error);
+        }
     }
 }
 
@@ -417,7 +445,24 @@ fn apply_map_streaming<W: Write>(
     let total = result.rows.len();
     let mut rows = Vec::with_capacity(total);
     for (index, row) in result.rows.iter().enumerate() {
-        rows.push(map_row(row, mapping, query_path, ql_stack, file_provider));
+        let mut function_progress = StepFunctionProgress {
+            step: progress,
+            writer,
+            completed_rows: index,
+            total_rows: total,
+            error: None,
+        };
+        rows.push(map_row_with_progress(
+            row,
+            mapping,
+            query_path,
+            ql_stack,
+            file_provider,
+            &mut function_progress,
+        ));
+        if let Some(error) = function_progress.error {
+            return Err(error);
+        }
         progress.update(writer, index + 1, total)?;
     }
 
@@ -533,6 +578,24 @@ fn map_row(
     ql_stack: &mut Vec<PathBuf>,
     file_provider: &dyn FileProvider,
 ) -> Value {
+    map_row_with_progress(
+        row,
+        mapping,
+        query_path,
+        ql_stack,
+        file_provider,
+        &mut crate::NoopFunctionProgress,
+    )
+}
+
+fn map_row_with_progress(
+    row: &Value,
+    mapping: &[MapExpr],
+    query_path: &Path,
+    ql_stack: &mut Vec<PathBuf>,
+    file_provider: &dyn FileProvider,
+    progress: &mut dyn FunctionProgressReporter,
+) -> Value {
     let mut output = Value::Object(Map::new());
     for expr in mapping {
         match expr {
@@ -542,7 +605,13 @@ fn map_row(
                 }
             }
             MapExpr::Specific { column, value } => {
-                let value = value.caluculate(row, query_path, ql_stack, file_provider);
+                let value = value.caluculate_with_progress(
+                    row,
+                    query_path,
+                    ql_stack,
+                    file_provider,
+                    progress,
+                );
                 assign_output(&mut output, column, value);
             }
         }
@@ -1206,5 +1275,50 @@ mod tests {
             apply_map_many_streaming(result, &map_many, &mut progress, &mut writer).unwrap();
 
         assert_primitive_values_use_default_path(result);
+    }
+
+    #[test]
+    fn streaming_nn_reports_function_progress() {
+        let result = QueryResult::new(vec![json!({
+            "rows": [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]],
+            "neighbors": [[0.0, 1.0], [2.0, 1.0]],
+        })]);
+        let map = MapStep {
+            config: Value::Object(Map::new()),
+            mapping: vec![MapExpr::Specific {
+                column: vec!["nearest".to_string()],
+                value: CaluculatedValue::FunctionCall {
+                    function: "nn".to_string(),
+                    parameters: vec![
+                        CaluculatedValue::Reference(vec!["rows".to_string()]),
+                        CaluculatedValue::Reference(vec!["neighbors".to_string()]),
+                        CaluculatedValue::Static(json!(1)),
+                    ],
+                },
+            }],
+        };
+        let mut progress = StepProgress::new(2, 3, "Map", Instant::now());
+        let mut writer = Vec::new();
+
+        apply_map_streaming(
+            result,
+            &map,
+            Path::new("query.ql"),
+            &mut Vec::new(),
+            &FsFileProvider,
+            &mut progress,
+            &mut writer,
+        )
+        .unwrap();
+
+        let messages = String::from_utf8(writer).unwrap();
+        assert!(messages.lines().any(|line| {
+            let message: Value = serde_json::from_str(line).unwrap();
+            message["type"] == "progress"
+                && message["substep"] == 2
+                && message["totalSubsteps"] == 3
+                && message["substepName"] == "NN"
+                && message["percent"].as_f64().is_some_and(|value| value > 0.0)
+        }));
     }
 }

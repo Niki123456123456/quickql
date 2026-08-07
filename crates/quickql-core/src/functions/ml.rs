@@ -1,4 +1,4 @@
-use crate::FnInfo;
+use crate::{FnInfo, MetaParameters};
 use linfa_nn::{distance::L2Dist, CommonNearestNeighbour, NearestNeighbour};
 use ndarray::{Array2, ArrayView1};
 use quickql_macros::fn_info;
@@ -55,7 +55,7 @@ fn random() -> f64 {
 }
 
 #[fn_info()]
-fn subtract(a: f64, b : f64)-> f64{
+fn subtract(a: f64, b: f64) -> f64 {
     a - b
 }
 
@@ -119,7 +119,7 @@ fn euclidean_distance(left: &[f64], right: &[f64]) -> f64 {
 
 // k-nearest-neighbor
 #[fn_info()]
-fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize) -> Value {
+fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize, params: MetaParameters) -> Value {
     if rows.is_empty() || neighbors.is_empty() || k == 0 {
         return Value::Null;
     }
@@ -159,7 +159,8 @@ fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize) -> Value {
     let mut indices = Vec::with_capacity(rows.len());
     let mut distances = Vec::with_capacity(rows.len());
 
-    for query in queries.rows() {
+    let total = queries.nrows();
+    for (query_index, query) in queries.rows().into_iter().enumerate() {
         let Ok(matches) = index.k_nearest(query, k) else {
             return Value::Null;
         };
@@ -176,6 +177,7 @@ fn nn(rows: Vec<Vec<f64>>, neighbors: Vec<Vec<f64>>, k: usize) -> Value {
                 .map(|(neighbor, _)| l2_distance(query, *neighbor))
                 .collect::<Vec<_>>(),
         );
+        params.progress.report("NN", query_index + 1, total);
     }
 
     serde_json::json!({

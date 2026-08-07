@@ -116,6 +116,23 @@ impl CaluculatedValue {
         ql_stack: &mut Vec<PathBuf>,
         file_provider: &dyn FileProvider,
     ) -> Value {
+        self.caluculate_with_progress(
+            value,
+            query_path,
+            ql_stack,
+            file_provider,
+            &mut NoopFunctionProgress,
+        )
+    }
+
+    pub(crate) fn caluculate_with_progress(
+        &self,
+        value: &Value,
+        query_path: &Path,
+        ql_stack: &mut Vec<PathBuf>,
+        file_provider: &dyn FileProvider,
+        progress: &mut dyn FunctionProgressReporter,
+    ) -> Value {
         match self {
             CaluculatedValue::Reference(path) => path
                 .iter()
@@ -140,30 +157,50 @@ impl CaluculatedValue {
                 for (key, entry) in entries {
                     output.insert(
                         key.clone(),
-                        entry.caluculate(value, query_path, ql_stack, file_provider),
+                        entry.caluculate_with_progress(
+                            value,
+                            query_path,
+                            ql_stack,
+                            file_provider,
+                            progress,
+                        ),
                     );
                 }
                 Value::Object(output)
             }
-            CaluculatedValue::Array(entries) => Value::Array(
-                entries
-                    .iter()
-                    .map(|entry| entry.caluculate(value, query_path, ql_stack, file_provider))
-                    .collect(),
-            ),
+            CaluculatedValue::Array(entries) => {
+                let mut output = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    output.push(entry.caluculate_with_progress(
+                        value,
+                        query_path,
+                        ql_stack,
+                        file_provider,
+                        progress,
+                    ));
+                }
+                Value::Array(output)
+            }
             CaluculatedValue::FunctionCall {
                 function,
                 parameters,
             } => {
-                let values: Vec<_> = parameters
-                    .iter()
-                    .map(|x| x.caluculate(value, query_path, ql_stack, file_provider))
-                    .collect();
+                let mut values = Vec::with_capacity(parameters.len());
+                for parameter in parameters {
+                    values.push(parameter.caluculate_with_progress(
+                        value,
+                        query_path,
+                        ql_stack,
+                        file_provider,
+                        progress,
+                    ));
+                }
 
                 let metaparams = MetaParameters {
                     query_path,
                     ql_stack,
                     file_provider,
+                    progress,
                 };
 
                 fn_info_for_call(function, &values)
@@ -174,10 +211,21 @@ impl CaluculatedValue {
     }
 }
 
+pub(crate) trait FunctionProgressReporter {
+    fn report(&mut self, name: &str, completed: usize, total: usize);
+}
+
+struct NoopFunctionProgress;
+
+impl FunctionProgressReporter for NoopFunctionProgress {
+    fn report(&mut self, _name: &str, _completed: usize, _total: usize) {}
+}
+
 struct MetaParameters<'a> {
     query_path: &'a Path,
     ql_stack: &'a mut Vec<PathBuf>,
     file_provider: &'a dyn FileProvider,
+    progress: &'a mut dyn FunctionProgressReporter,
 }
 
 pub trait FileProvider: Sync {
@@ -230,11 +278,12 @@ fn get(values: &[Value], params: MetaParameters) -> Value {
             .map(|x| x.to_string())
             .collect(),
     )
-    .caluculate(
+    .caluculate_with_progress(
         values.first().unwrap_or_default(),
         params.query_path,
         params.ql_stack,
         params.file_provider,
+        params.progress,
     )
 }
 #[fn_info()]
