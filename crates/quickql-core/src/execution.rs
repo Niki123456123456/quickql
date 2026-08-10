@@ -25,6 +25,19 @@ pub fn stream_query_jsonl<W: Write>(
     stream_query_jsonl_with_provider(query_path, writer, batch_size, &FsFileProvider)
 }
 
+pub fn execute_query(query_path: &Path) -> Result<QueryResult> {
+    let query_text = std::fs::read_to_string(query_path)
+        .with_context(|| format!("Reading query file {}", query_path.display()))?;
+    let query = parse_query(&query_text)?;
+    let mut ql_stack = Vec::new();
+    if let Ok(canonical) = query_path.canonicalize() {
+        ql_stack.push(canonical);
+    }
+
+    execute_pipeline_with_stack(&query, query_path, &mut ql_stack, &FsFileProvider)
+        .with_context(|| format!("Executing pipeline {}", query_path.display()))
+}
+
 pub fn stream_query_jsonl_with_provider<W: Write>(
     query_path: &Path,
     writer: &mut W,

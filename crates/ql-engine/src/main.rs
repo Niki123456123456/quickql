@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::BufWriter;
-use std::path::PathBuf;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "ql-engine")]
@@ -18,6 +18,11 @@ enum Command {
         query: PathBuf,
         #[arg(long, default_value_t = quickql_core::DEFAULT_STREAM_BATCH_SIZE)]
         batch_size: usize,
+    },
+    /// Execute a query and write its rows to a JSON file beside the query.
+    Write {
+        #[arg(long)]
+        query: PathBuf,
     },
     Fields {
         #[arg(long)]
@@ -36,6 +41,10 @@ fn main() -> Result<()> {
             let mut writer = BufWriter::new(lock);
             quickql_core::stream_query_jsonl(&query, &mut writer, batch_size)?;
         }
+        Command::Write { query } => {
+            let output_path = write_query_to_json(&query)?;
+            println!("{}", output_path.display());
+        }
         Command::Fields { query, max_rows } => {
             let query_text = std::fs::read_to_string(&query)?;
             if let Some(source_path) = quickql_core::source_path_for_query(&query, &query_text)? {
@@ -47,4 +56,58 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn json_output_path(query: &Path) -> PathBuf {
+    query.with_extension("json")
+}
+
+fn write_query_to_json(query: &Path) -> Result<PathBuf> {
+    let result = quickql_core::execute_query(query)?;
+    let output_path = json_output_path(query);
+    let file = std::fs::File::create(&output_path)
+        .with_context(|| format!("Creating output file {}", output_path.display()))?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, &result.rows)
+        .with_context(|| format!("Writing output file {}", output_path.display()))?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn json_output_path_replaces_query_extension() {
+        assert_eq!(
+            json_output_path(Path::new("queries/ks_entries_basic_nomic2_post.ql")),
+            PathBuf::from("queries/ks_entries_basic_nomic2_post.json")
+        );
+    }
+
+    #[test]
+    fn writes_query_rows_as_json_array() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ql-engine-write-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let query_path = temp_dir.join("example.ql");
+        std::fs::write(&query_path, "SOURCE [{id: 1}, {id: 2}]\nMAP id").unwrap();
+
+        let output_path = write_query_to_json(&query_path).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&output_path).unwrap()).unwrap();
+
+        assert_eq!(output_path, temp_dir.join("example.json"));
+        assert_eq!(output, serde_json::json!([{ "id": 1 }, { "id": 2 }]));
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
 }
