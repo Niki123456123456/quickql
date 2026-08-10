@@ -6,6 +6,11 @@ use linfa_nn::{
 use ndarray::{Array2, ArrayView, ArrayView1, Dimension};
 use quickql_macros::fn_info;
 use serde_json::Value;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc, Mutex,
+};
+use std::thread;
 
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![
@@ -176,29 +181,77 @@ fn nn(
         return Value::Null;
     };
 
-    let mut indices = Vec::with_capacity(rows.len());
-    let mut distances = Vec::with_capacity(rows.len());
-
     let total = queries.nrows();
-    for (query_index, query) in queries.rows().into_iter().enumerate() {
-        let Ok(matches) = index.k_nearest(query, k) else {
-            return Value::Null;
-        };
+    let worker_count = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(total);
+    let next_query = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let output = Mutex::new(vec![None; total]);
+    let (completed_sender, completed_receiver) = mpsc::channel();
 
-        indices.push(
-            matches
-                .iter()
-                .map(|(_, neighbor_index)| *neighbor_index)
-                .collect::<Vec<_>>(),
-        );
-        distances.push(
-            matches
-                .iter()
-                .map(|(neighbor, _)| distance.distance(query, *neighbor))
-                .collect::<Vec<_>>(),
-        );
-        params.progress.report("NN", query_index + 1, total);
+    let succeeded = thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let completed_sender = completed_sender.clone();
+            let next_query = &next_query;
+            let failed = &failed;
+            let output = &output;
+            let index = &index;
+            let queries = &queries;
+
+            scope.spawn(move || loop {
+                if failed.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let query_index = next_query.fetch_add(1, Ordering::Relaxed);
+                if query_index >= total {
+                    break;
+                }
+
+                let query = queries.row(query_index);
+                let Ok(matches) = index.k_nearest(query, k) else {
+                    failed.store(true, Ordering::Relaxed);
+                    let _ = completed_sender.send(false);
+                    break;
+                };
+                let indices = matches
+                    .iter()
+                    .map(|(_, neighbor_index)| *neighbor_index)
+                    .collect::<Vec<_>>();
+                let distances = matches
+                    .iter()
+                    .map(|(neighbor, _)| distance.distance(query, *neighbor))
+                    .collect::<Vec<_>>();
+
+                output.lock().unwrap()[query_index] = Some((indices, distances));
+                if completed_sender.send(true).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(completed_sender);
+
+        for completed in 1..=total {
+            match completed_receiver.recv() {
+                Ok(true) => params.progress.report("NN", completed, total),
+                Ok(false) | Err(_) => return false,
+            }
+        }
+        true
+    });
+
+    if !succeeded {
+        return Value::Null;
     }
+
+    let (indices, distances): (Vec<_>, Vec<_>) = output
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|result| result.unwrap())
+        .unzip();
 
     serde_json::json!({
         "distance": distances,
@@ -263,8 +316,10 @@ impl Distance<f64> for CosineDist {
 
 #[cfg(test)]
 mod tests {
-    use super::{nn2, random, DistanceMetric};
+    use super::{nn, nn2, random, DistanceMetric};
+    use crate::{FsFileProvider, MetaParameters, NoopFunctionProgress};
     use serde_json::{json, Value};
+    use std::path::Path;
 
     #[test]
     fn nn2_returns_nearest_neighbors_in_distance_order() {
@@ -293,6 +348,31 @@ mod tests {
         assert_eq!(nn2(vec![vec![1.0]], vec![vec![1.0]], 0), Value::Null);
         assert_eq!(nn2(vec![vec![1.0, 2.0]], vec![vec![1.0]], 1), Value::Null);
         assert_eq!(nn2(vec![vec![f64::NAN]], vec![vec![1.0]], 1), Value::Null);
+    }
+
+    #[test]
+    fn parallel_nn_preserves_query_order() {
+        let rows = (0..64).map(|value| vec![value as f64]).collect::<Vec<_>>();
+        let neighbors = rows.clone();
+        let expected_indices = (0..64).map(|value| json!([value])).collect::<Vec<_>>();
+        let mut ql_stack = Vec::new();
+        let mut progress = NoopFunctionProgress;
+
+        let result = nn(
+            rows,
+            neighbors,
+            1,
+            None,
+            MetaParameters {
+                query_path: Path::new("query.ql"),
+                ql_stack: &mut ql_stack,
+                file_provider: &FsFileProvider,
+                progress: &mut progress,
+            },
+        );
+
+        assert_eq!(result["index"], Value::Array(expected_indices));
+        assert_eq!(result["distance"], json!(vec![vec![0.0]; 64]));
     }
 
     #[test]
