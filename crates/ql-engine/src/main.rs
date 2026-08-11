@@ -42,8 +42,10 @@ fn main() -> Result<()> {
             quickql_core::stream_query_jsonl(&query, &mut writer, batch_size)?;
         }
         Command::Write { query } => {
-            let output_path = write_query_to_json(&query)?;
-            println!("{}", output_path.display());
+            let stdout = std::io::stdout();
+            let lock = stdout.lock();
+            let mut writer = BufWriter::new(lock);
+            write_query_to_json(&query, &mut writer)?;
         }
         Command::Fields { query, max_rows } => {
             let query_text = std::fs::read_to_string(&query)?;
@@ -62,9 +64,12 @@ fn json_output_path(query: &Path) -> PathBuf {
     query.with_extension("json")
 }
 
-fn write_query_to_json(query: &Path) -> Result<PathBuf> {
-    let result = quickql_core::execute_query(query)?;
+fn write_query_to_json<W: Write>(query: &Path, progress_writer: &mut W) -> Result<PathBuf> {
     let output_path = json_output_path(query);
+    writeln!(progress_writer, "{}", output_path.display())?;
+    progress_writer.flush()?;
+
+    let result = quickql_core::execute_query_with_progress(query, progress_writer)?;
     let file = std::fs::File::create(&output_path)
         .with_context(|| format!("Creating output file {}", output_path.display()))?;
     let mut writer = BufWriter::new(file);
@@ -102,12 +107,21 @@ mod tests {
         let query_path = temp_dir.join("example.ql");
         std::fs::write(&query_path, "SOURCE [{id: 1}, {id: 2}]\nMAP id").unwrap();
 
-        let output_path = write_query_to_json(&query_path).unwrap();
+        let mut console = Vec::new();
+        let output_path = write_query_to_json(&query_path, &mut console).unwrap();
         let output: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&output_path).unwrap()).unwrap();
 
         assert_eq!(output_path, temp_dir.join("example.json"));
         assert_eq!(output, serde_json::json!([{ "id": 1 }, { "id": 2 }]));
+
+        let console = String::from_utf8(console).unwrap();
+        let mut lines = console.lines();
+        assert_eq!(lines.next(), Some(output_path.to_str().unwrap()));
+        assert!(lines.all(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .is_ok_and(|message| message["type"] == "progress")
+        }));
         std::fs::remove_dir_all(temp_dir).unwrap();
     }
 }

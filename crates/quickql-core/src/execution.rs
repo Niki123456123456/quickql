@@ -38,6 +38,18 @@ pub fn execute_query(query_path: &Path) -> Result<QueryResult> {
         .with_context(|| format!("Executing pipeline {}", query_path.display()))
 }
 
+pub fn execute_query_with_progress<W: Write>(
+    query_path: &Path,
+    progress_writer: &mut W,
+) -> Result<QueryResult> {
+    let query_text = std::fs::read_to_string(query_path)
+        .with_context(|| format!("Reading query file {}", query_path.display()))?;
+    let query = parse_query(&query_text)?;
+
+    execute_pipeline_streaming(&query, query_path, progress_writer, &FsFileProvider)
+        .with_context(|| format!("Executing pipeline {}", query_path.display()))
+}
+
 pub fn stream_query_jsonl_with_provider<W: Write>(
     query_path: &Path,
     writer: &mut W,

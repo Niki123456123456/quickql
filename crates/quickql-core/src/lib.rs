@@ -39,7 +39,7 @@ mod tsne;
 mod umap;
 
 pub use execution::{
-    execute_query, fields_from_source_sample, json_fields_for_query,
+    execute_query, execute_query_with_progress, fields_from_source_sample, json_fields_for_query,
     json_fields_from_source_sample, source_path_for_query, stream_query_jsonl,
     stream_query_jsonl_with_provider,
 };
