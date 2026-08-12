@@ -261,6 +261,22 @@ MAP rows = ZIPROWS({name: ['a', 'b', 'c'], value: [1, 2, 3]})
 
 ---
 
+### UNZIPROWS
+
+Converts an array of row objects into an object of column arrays. Every row must contain the same fields; otherwise it returns `null`. An empty input array returns an empty object.
+
+```ql
+MAP columns = UNZIPROWS([
+  {a: 42, b: 2},
+  {a: 43, b: 3}
+])
+-- {a: [42, 43], b: [2, 3]}
+```
+
+`UNZIPROWS` is the inverse of `ZIPROWS` for rows that all have the same fields.
+
+---
+
 ## Data-loading functions
 
 These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.

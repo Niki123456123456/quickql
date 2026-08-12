@@ -13,6 +13,7 @@ pub(crate) fn infos() -> Vec<FnInfo> {
         count_info(),
         cross_join_info(),
         zip_rows_info(),
+        unzip_rows_info(),
     ]
 }
 
@@ -179,6 +180,46 @@ fn zip_rows(input: &Value) -> Value {
     Value::Array(rows)
 }
 
+#[fn_info()]
+fn unzip_rows(input: &Value) -> Value {
+    let Some(rows) = input.as_array() else {
+        return Value::Null;
+    };
+    let Some(first_row) = rows.first() else {
+        return Value::Object(serde_json::Map::new());
+    };
+    let Some(first_row) = first_row.as_object() else {
+        return Value::Null;
+    };
+
+    let keys = first_row.keys().cloned().collect::<Vec<_>>();
+    let rows = rows
+        .iter()
+        .map(Value::as_object)
+        .collect::<Option<Vec<_>>>();
+    let Some(rows) = rows else {
+        return Value::Null;
+    };
+    if rows
+        .iter()
+        .any(|row| row.len() != keys.len() || keys.iter().any(|key| !row.contains_key(key)))
+    {
+        return Value::Null;
+    }
+
+    Value::Object(
+        keys.into_iter()
+            .map(|key| {
+                let values = rows
+                    .iter()
+                    .map(|row| row.get(&key).unwrap().clone())
+                    .collect();
+                (key, Value::Array(values))
+            })
+            .collect(),
+    )
+}
+
 fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
     match (left.as_f64(), right.as_f64()) {
         (Some(left), Some(right)) => left
@@ -190,4 +231,32 @@ fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
 
 fn value_to_i64(value: &Value) -> Option<i64> {
     value.as_i64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unzip_rows_converts_rows_to_column_arrays() {
+        assert_eq!(
+            unzip_rows(&json!([
+                {"a": 42, "b": 2},
+                {"a": 43, "b": 3}
+            ])),
+            json!({"a": [42, 43], "b": [2, 3]})
+        );
+    }
+
+    #[test]
+    fn unzip_rows_rejects_invalid_or_inconsistent_rows() {
+        assert_eq!(unzip_rows(&json!({"a": 1})), Value::Null);
+        assert_eq!(unzip_rows(&json!([{"a": 1}, 2])), Value::Null);
+        assert_eq!(
+            unzip_rows(&json!([{"a": 1}, {"a": 2, "b": 3}])),
+            Value::Null
+        );
+        assert_eq!(unzip_rows(&json!([])), json!({}));
+    }
 }

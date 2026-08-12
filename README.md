@@ -123,6 +123,7 @@ LIMIT 1024
 | `SUM(field)` | Sum of numeric values (works on grouped arrays) |
 | `COUNT(field)` | Count of values |
 | `ARRAY(a, b, ...)` | Collect values into an array |
+| `UNZIPROWS(rows)` | Convert row objects into column arrays |
 | `CONCAT(a, b, ...)` | Concatenate strings |
 | `INDEXOF(array, value)` | Zero-based index of a value in an array, or `-1` |
 | `EQ(a, b)` | `true` if `a` equals `b` |
