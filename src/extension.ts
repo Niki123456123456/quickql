@@ -81,6 +81,12 @@ async function runActiveQuery(context: vscode.ExtensionContext): Promise<void> {
         resultsProvider.setProgress(progress);
       });
       resultsProvider.setResult(result);
+      try {
+        await writeCachedResult(result, cwd, editor.document.uri.fsPath);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showWarningMessage(`Could not cache QuickQL results: ${message}`);
+      }
       await vscode.commands.executeCommand('quickql.results.focus');
     }
   );
@@ -240,6 +246,85 @@ function runEngine(
       page.push(row);
       rowCount += 1;
     }
+  });
+}
+
+async function writeCachedResult(
+  result: QueryResult,
+  workspacePath: string,
+  queryPath: string
+): Promise<string> {
+  const relativeQueryPath = path.relative(workspacePath, queryPath);
+  if (relativeQueryPath.startsWith(`..${path.sep}`) || path.isAbsolute(relativeQueryPath)) {
+    throw new Error(`Query is outside the workspace: ${queryPath}`);
+  }
+
+  const parsedQueryPath = path.parse(relativeQueryPath);
+  const cachePath = path.join(
+    workspacePath,
+    '.cache',
+    parsedQueryPath.dir,
+    `${parsedQueryPath.name}.json`
+  );
+  const temporaryPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+  const stream = fs.createWriteStream(temporaryPath, { encoding: 'utf8' });
+
+  try {
+    await writeToStream(stream, '[\n');
+    for (let rowIndex = 0; rowIndex < result.rowCount; rowIndex += 1) {
+      const pageStart = Math.floor(rowIndex / result.pageSize) * result.pageSize;
+      const page = result.pages.get(pageStart);
+      const row = page?.[rowIndex - pageStart] ?? {};
+      await writeToStream(stream, `${rowIndex === 0 ? '  ' : ',\n  '}${JSON.stringify(row)}`);
+    }
+    await writeToStream(stream, '\n]\n');
+    await closeStream(stream);
+    await fs.promises.rename(temporaryPath, cachePath);
+  } catch (error) {
+    stream.destroy();
+    await fs.promises.rm(temporaryPath, { force: true });
+    throw error;
+  }
+
+  return cachePath;
+}
+
+function writeToStream(stream: fs.WriteStream, chunk: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('drain', onDrain);
+      reject(error);
+    };
+    const onDrain = (): void => {
+      stream.off('error', onError);
+      resolve();
+    };
+
+    stream.once('error', onError);
+    if (stream.write(chunk)) {
+      stream.off('error', onError);
+      resolve();
+    } else {
+      stream.once('drain', onDrain);
+    }
+  });
+}
+
+function closeStream(stream: fs.WriteStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('finish', onFinish);
+      reject(error);
+    };
+    const onFinish = (): void => {
+      stream.off('error', onError);
+      resolve();
+    };
+
+    stream.once('error', onError);
+    stream.once('finish', onFinish);
+    stream.end();
   });
 }
 

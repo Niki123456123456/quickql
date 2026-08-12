@@ -4,7 +4,13 @@ use serde_json::Value;
 use crate::{flatten_value, FnInfo};
 
 pub(crate) fn infos() -> Vec<FnInfo> {
-    vec![sum_info(), min_info(), to_number_info(), ceil_info()]
+    vec![
+        sum_info(),
+        min_info(),
+        to_number_info(),
+        ceil_info(),
+        floor_info(),
+    ]
 }
 
 #[fn_info()]
@@ -42,6 +48,11 @@ fn ceil(value: f64) -> i64 {
     value.ceil() as i64
 }
 
+#[fn_info]
+fn floor(value: f64) -> i64 {
+    value.floor() as i64
+}
+
 fn number_from_value(value: Option<&Value>) -> Option<f64> {
     match value {
         Some(Value::Number(value)) => value.as_f64().filter(|value| value.is_finite()),
@@ -70,5 +81,18 @@ fn parse_localised_number(value: &str) -> Option<f64> {
         value.replace(',', ".").parse().ok()
     } else {
         value.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_decimal_comma_and_rounds_down() {
+        let value = to_number(&Value::String("82,3125".into())).unwrap();
+
+        assert_eq!(value, 82.3125);
+        assert_eq!(floor(value), 82);
     }
 }
