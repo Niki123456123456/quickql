@@ -10,6 +10,7 @@ FILTER EQ(status, 'shipped')
 MAP customer_id, total, shipped_date = GETDATE(shipped_at)
 GROUP_BY customer_id MAP total = SUM(total), last_ship = MAXDATE(shipped_date)
 SORT_BY last_ship DESC
+LIMIT 1024
 ```
 
 ## Statements
@@ -24,6 +25,7 @@ Each line in a `.ql` file is one pipeline step. Steps are separated by newlines;
 | [`MAP_MANY`](docs/map_many.md) | Flatten an array field into individual rows |
 | [`GROUP_BY`](docs/group_by.md) | Group rows by keys and aggregate |
 | [`SORT_BY`](docs/sort_by.md) | Sort rows by one or more columns |
+| [`LIMIT`](docs/limit.md) | Keep at most the first number of rows |
 
 ## Data Sources
 
@@ -106,6 +108,14 @@ SOURCE OPEN('products.json')
 SORT_BY price DESC, name ASC
 ```
 
+### Limit
+
+```ql
+SOURCE OPEN('products.json')
+SORT_BY price DESC
+LIMIT 1024
+```
+
 ## Functions
 
 | Function | Description |
@@ -170,5 +180,6 @@ vsce package
 - [MAP_MANY](docs/map_many.md) — flattening nested arrays
 - [GROUP_BY](docs/group_by.md) — grouping and aggregation
 - [SORT_BY](docs/sort_by.md) — sorting results
+- [LIMIT](docs/limit.md) — limiting the number of results
 - [Functions](docs/functions.md) — built-in functions reference
 - [Values & Expressions](docs/values-and-expressions.md) — literals, references, operators

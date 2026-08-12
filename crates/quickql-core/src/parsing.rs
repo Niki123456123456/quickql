@@ -33,8 +33,20 @@ fn parse_statement(pair: Pair<'_, Rule>) -> Result<SubQuery> {
         Rule::map_many_stmt => Ok(SubQuery::MapMany(parse_map_many_stmt(statement)?)),
         Rule::group_by_stmt => parse_group_by_stmt(statement),
         Rule::sort_by_stmt => parse_sort_by_stmt(statement),
+        Rule::limit_stmt => parse_limit_stmt(statement),
         rule => bail!("Unsupported query statement: {rule:?}"),
     }
+}
+
+fn parse_limit_stmt(pair: Pair<'_, Rule>) -> Result<SubQuery> {
+    let count = pair
+        .into_inner()
+        .find(|p| p.as_rule() == Rule::limit_count)
+        .context("LIMIT requires a non-negative integer")?
+        .as_str()
+        .parse::<usize>()
+        .context("LIMIT is too large")?;
+    Ok(SubQuery::Limit(count))
 }
 
 fn parse_source_stmt(pair: Pair<'_, Rule>) -> Result<Vec<CaluculatedValue>> {

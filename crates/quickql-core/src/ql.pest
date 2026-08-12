@@ -3,7 +3,7 @@ source_only = { SOI ~ hspace* ~ source_stmt ~ hspace* ~ comment? ~ EOI }
 
 line       = _{ hspace* ~ statement? ~ hspace* ~ comment? ~ NEWLINE+ }
 final_line = _{ hspace* ~ statement? ~ hspace* ~ comment? }
-statement  = { source_stmt | map_many_stmt | group_by_stmt | sort_by_stmt | filter_stmt | map_stmt }
+statement  = { source_stmt | map_many_stmt | group_by_stmt | sort_by_stmt | filter_stmt | limit_stmt | map_stmt }
 
 source_stmt   = { ^"SOURCE" ~ hspace+ ~ value_list }
 map_stmt      = { ^"MAP" ~ (hspace* ~ map_config)? ~ hspace+ ~ map_item_list }
@@ -11,6 +11,7 @@ filter_stmt   = { ^"FILTER" ~ hspace+ ~ value_list }
 map_many_stmt = { ^"MAP_MANY" ~ hspace+ ~ identifier ~ (hspace+ ~ ^"INCLUDE" ~ hspace+ ~ include_column_list)? }
 group_by_stmt = { ^"GROUP_BY" ~ hspace+ ~ group_key_list ~ (hspace+ ~ ^"MAP" ~ hspace+ ~ map_item_list)? }
 sort_by_stmt = { ^"SORT_BY" ~ hspace+ ~ sort_key_list }
+limit_stmt   = { ^"LIMIT" ~ hspace+ ~ limit_count }
 
 value_list  = { value ~ (hspace* ~ "," ~ hspace* ~ value)* }
 
@@ -24,6 +25,7 @@ include_column_list = { identifier ~ (hspace* ~ "," ~ hspace* ~ identifier)* }
 sort_key_list = { sort_key ~ (hspace* ~ "," ~ hspace* ~ sort_key)* }
 sort_key      = { identifier ~ (hspace+ ~ sort_direction)? }
 sort_direction = @{ (^"ASC" | ^"DESC") ~ !(ASCII_ALPHANUMERIC | "_") }
+limit_count    = @{ ASCII_DIGIT+ }
 
 assignment = { identifier ~ hspace* ~ "=" ~ hspace* ~ value }
 

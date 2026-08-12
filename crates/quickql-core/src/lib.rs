@@ -69,6 +69,7 @@ pub enum SubQuery {
         mapping: Vec<MapExpr>,
     },
     SortBy(Vec<SortKey>),
+    Limit(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,6 +516,44 @@ mod tests {
         assert!(output.contains(r#""type":"meta""#));
         assert!(output.contains(r#""type":"batch""#));
         assert!(output.contains(r#""rowCount":2"#));
+    }
+
+    #[test]
+    fn parses_limit_as_a_non_negative_integer() {
+        let query = parse_query("SOURCE [1, 2, 3]\nLIMIT 2").unwrap();
+
+        assert_eq!(query.steps[1], SubQuery::Limit(2));
+        assert!(parse_query("SOURCE [1]\nLIMIT -1").is_err());
+        assert!(parse_query("SOURCE [1]\nLIMIT 1.5").is_err());
+        assert!(parse_query("SOURCE [1]\nLIMIT many").is_err());
+    }
+
+    #[test]
+    fn limit_restricts_streamed_rows() {
+        let query_path = PathBuf::from("memory-query.ql");
+        let provider = MemoryFileProvider {
+            path: query_path.clone(),
+            contents: "SOURCE [1, 2, 3]\nLIMIT 2".to_string(),
+        };
+        let mut output = Vec::new();
+
+        stream_query_jsonl_with_provider(&query_path, &mut output, 100, &provider).unwrap();
+
+        let messages = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let rows = messages
+            .iter()
+            .filter(|message| message["type"] == "batch")
+            .flat_map(|message| message["rows"].as_array().unwrap())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(rows, vec![serde_json::json!(1), serde_json::json!(2)]);
+        assert!(messages
+            .iter()
+            .any(|message| message["type"] == "done" && message["rowCount"] == 2));
     }
 
     #[test]

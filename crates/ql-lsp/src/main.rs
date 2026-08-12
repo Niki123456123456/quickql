@@ -91,6 +91,7 @@ fn keyword_items() -> Vec<CompletionItem> {
         "FILTER",
         "GROUP_BY",
         "SORT_BY",
+        "LIMIT",
         "INCLUDE",
         "OR",
         "SUM",

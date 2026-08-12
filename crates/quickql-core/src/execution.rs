@@ -272,6 +272,7 @@ fn execute_pipeline_streaming<W: Write>(
                 file_provider,
             )?,
             SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
+            SubQuery::Limit(count) => apply_limit(result, *count),
         };
 
         write_step_progress(
@@ -489,6 +490,7 @@ fn execute_pipeline_with_stack(
                 apply_group_by(result, keys, mapping, query_path, ql_stack, file_provider)?
             }
             SubQuery::SortBy(sort_keys) => apply_sort_by(result, sort_keys),
+            SubQuery::Limit(count) => apply_limit(result, *count),
         };
     }
 
@@ -1040,6 +1042,11 @@ fn apply_sort_by(result: QueryResult, sort_keys: &[SortKey]) -> QueryResult {
     QueryResult::new(rows)
 }
 
+fn apply_limit(mut result: QueryResult, count: usize) -> QueryResult {
+    result.rows.truncate(count);
+    result
+}
+
 fn compare_values(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Null, Value::Null) => Ordering::Equal,
@@ -1262,6 +1269,7 @@ fn subquery_name(step: &SubQuery) -> &'static str {
         SubQuery::MapMany(_) => "Map many",
         SubQuery::GroupBy { .. } => "Group by",
         SubQuery::SortBy(_) => "Sort by",
+        SubQuery::Limit(_) => "Limit",
     }
 }
 
