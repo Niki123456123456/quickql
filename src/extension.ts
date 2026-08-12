@@ -142,7 +142,13 @@ function runEngine(
   onProgress: (progress: QueryProgress) => void
 ): Promise<QueryResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(engine, ['stream', '--query', queryPath, '--batch-size', String(pageSize)], {
+    const cacheFolder = path.join(cwd, '.cache');
+    const child = spawn(engine, [
+      'stream',
+      '--query', queryPath,
+      '--batch-size', String(pageSize),
+      '--cache-folder', cacheFolder
+    ], {
       cwd,
       env: { ...secrets, ...process.env }
     });

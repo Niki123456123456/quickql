@@ -25,6 +25,93 @@ pub fn stream_query_jsonl<W: Write>(
     stream_query_jsonl_with_provider(query_path, writer, batch_size, &FsFileProvider)
 }
 
+pub fn stream_query_jsonl_with_cache_folder<W: Write>(
+    query_path: &Path,
+    writer: &mut W,
+    batch_size: usize,
+    cache_folder: &Path,
+) -> Result<()> {
+    stream_query_jsonl_with_provider_and_cache_folder(
+        query_path,
+        writer,
+        batch_size,
+        &FsFileProvider,
+        cache_folder,
+    )
+}
+
+pub fn stream_query_jsonl_with_provider_and_cache_folder<W: Write>(
+    query_path: &Path,
+    writer: &mut W,
+    batch_size: usize,
+    file_provider: &dyn FileProvider,
+    cache_folder: &Path,
+) -> Result<()> {
+    let file_provider = CacheFileProvider::new(file_provider, cache_folder);
+    stream_query_jsonl_with_provider(query_path, writer, batch_size, &file_provider)
+}
+
+struct CacheFileProvider<'a> {
+    inner: &'a dyn FileProvider,
+    cache_folder: PathBuf,
+    source_root: PathBuf,
+}
+
+impl<'a> CacheFileProvider<'a> {
+    fn new(inner: &'a dyn FileProvider, cache_folder: &Path) -> Self {
+        let cache_folder = if cache_folder.is_absolute() {
+            cache_folder.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(cache_folder)
+        };
+        let source_root = cache_folder
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        Self {
+            inner,
+            cache_folder,
+            source_root,
+        }
+    }
+
+    fn resolve_cached_query_path(&self, query_path: &Path) -> Option<PathBuf> {
+        let source_root = self
+            .inner
+            .canonicalize(&self.source_root)
+            .unwrap_or_else(|_| self.source_root.clone());
+        let query_path = self.inner.canonicalize(query_path).ok()?;
+        let relative_path = query_path.strip_prefix(source_root).ok()?;
+        let mut cache_path = self.cache_folder.join(relative_path);
+        cache_path.set_extension("json");
+        self.inner.is_file(&cache_path).then_some(cache_path)
+    }
+}
+
+impl FileProvider for CacheFileProvider<'_> {
+    fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
+        self.inner.read_to_string(path)
+    }
+
+    fn read_bytes(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.inner.read_bytes(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        self.inner.is_file(path)
+    }
+
+    fn cached_query_path(&self, query_path: &Path) -> Option<PathBuf> {
+        self.resolve_cached_query_path(query_path)
+    }
+}
+
 pub fn execute_query(query_path: &Path) -> Result<QueryResult> {
     let query_text = std::fs::read_to_string(query_path)
         .with_context(|| format!("Reading query file {}", query_path.display()))?;
@@ -822,6 +909,9 @@ pub fn load_query_source(
     if is_csv_path(&source_path) {
         load_csv_source(&source_path, file_provider)
     } else if is_ql_path(&source_path) {
+        if let Some(cache_path) = file_provider.cached_query_path(&source_path) {
+            return load_json_source(&cache_path, file_provider);
+        }
         let result = load_ql_source(&source_path, ql_stack, file_provider)?;
         return Ok(Value::Array(result.rows));
     } else {
@@ -1259,6 +1349,51 @@ fn is_http_uri(source: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn nested_ql_source_prefers_cached_json_and_falls_back_to_query() {
+        let workspace = std::env::temp_dir().join(format!(
+            "quickql-cache-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let query_path = workspace.join("a_pipeline/pipeline/knowledge/requested/union.ql");
+        let nested_query_path =
+            workspace.join("a_pipeline/pipeline/knowledge/pipeline/bgem3_4000.ql");
+        let cache_folder = workspace.join(".cache");
+        let cached_json_path =
+            cache_folder.join("a_pipeline/pipeline/knowledge/pipeline/bgem3_4000.json");
+        std::fs::create_dir_all(query_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(nested_query_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cached_json_path.parent().unwrap()).unwrap();
+        std::fs::write(&query_path, "SOURCE OPEN('../pipeline//bgem3_4000.ql')").unwrap();
+        std::fs::write(&nested_query_path, "SOURCE [{value: 'from query'}]").unwrap();
+        std::fs::write(&cached_json_path, r#"[{"value":"from cache"}]"#).unwrap();
+
+        let mut output = Vec::new();
+        stream_query_jsonl_with_cache_folder(&query_path, &mut output, 200, &cache_folder).unwrap();
+        assert_eq!(streamed_rows(&output), vec![json!({"value": "from cache"})]);
+
+        std::fs::remove_file(cached_json_path).unwrap();
+        output.clear();
+        stream_query_jsonl_with_cache_folder(&query_path, &mut output, 200, &cache_folder).unwrap();
+        assert_eq!(streamed_rows(&output), vec![json!({"value": "from query"})]);
+
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    fn streamed_rows(output: &[u8]) -> Vec<Value> {
+        String::from_utf8_lossy(output)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|message| message["type"] == "batch")
+            .flat_map(|message| message["rows"].as_array().cloned().unwrap_or_default())
+            .collect()
+    }
 
     fn primitive_map_many_input() -> (QueryResult, MapMany) {
         (

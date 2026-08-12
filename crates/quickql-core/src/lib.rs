@@ -41,7 +41,8 @@ mod umap;
 pub use execution::{
     execute_query, execute_query_with_progress, fields_from_source_sample, json_fields_for_query,
     json_fields_from_source_sample, source_path_for_query, stream_query_jsonl,
-    stream_query_jsonl_with_provider,
+    stream_query_jsonl_with_cache_folder, stream_query_jsonl_with_provider,
+    stream_query_jsonl_with_provider_and_cache_folder,
 };
 pub use parsing::parse_query;
 
@@ -239,6 +240,14 @@ pub trait FileProvider: Sync {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         Ok(path.to_path_buf())
     }
+
+    fn is_file(&self, _path: &Path) -> bool {
+        false
+    }
+
+    fn cached_query_path(&self, _query_path: &Path) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Default)]
@@ -255,6 +264,10 @@ impl FileProvider for FsFileProvider {
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         fs::canonicalize(path)
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
     }
 }
 

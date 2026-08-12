@@ -18,6 +18,9 @@ enum Command {
         query: PathBuf,
         #[arg(long, default_value_t = quickql_core::DEFAULT_STREAM_BATCH_SIZE)]
         batch_size: usize,
+        /// Prefer cached JSON files for nested QL sources.
+        #[arg(long)]
+        cache_folder: Option<PathBuf>,
     },
     /// Execute a query and write its rows to a JSON file beside the query.
     Write {
@@ -35,11 +38,24 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Stream { query, batch_size } => {
+        Command::Stream {
+            query,
+            batch_size,
+            cache_folder,
+        } => {
             let stdout = std::io::stdout();
             let lock = stdout.lock();
             let mut writer = BufWriter::new(lock);
-            quickql_core::stream_query_jsonl(&query, &mut writer, batch_size)?;
+            if let Some(cache_folder) = cache_folder {
+                quickql_core::stream_query_jsonl_with_cache_folder(
+                    &query,
+                    &mut writer,
+                    batch_size,
+                    &cache_folder,
+                )?;
+            } else {
+                quickql_core::stream_query_jsonl(&query, &mut writer, batch_size)?;
+            }
         }
         Command::Write { query } => {
             let stdout = std::io::stdout();
