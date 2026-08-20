@@ -1,4 +1,4 @@
-# QuickQL
+# QuickQL (quick query language)
 
 A lightweight pipeline query language for transforming JSON, CSV, and HTTP data sources. QuickQL queries are plain text files (`.ql`) that describe a sequence of data transformation steps executed top to bottom.
 
