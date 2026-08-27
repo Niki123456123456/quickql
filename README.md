@@ -27,6 +27,22 @@ Each line in a `.ql` file is one pipeline step. Steps are separated by newlines;
 | [`SORT_BY`](docs/sort_by.md) | Sort rows by one or more columns |
 | [`LIMIT`](docs/limit.md) | Keep at most the first number of rows |
 
+### Equivalents in other query APIs
+
+The following examples assume a collection named `rows`. They show the closest
+conceptual equivalent; loading data and accessing dynamically typed fields depend
+on the database, serialization library, and data model in use.
+
+| QuickQL statement | SQL | .NET LINQ (C#) | JavaScript | Java Stream API | Rust iterators |
+|-------------------|-----|----------------|------------|-----------------|----------------|
+| `SOURCE OPEN('data.json')` | `SELECT * FROM source` | `LoadRows("data.json")` | `await loadRows("data.json")` | `loadRows("data.json").stream()` | `load_rows("data.json")?.into_iter()` |
+| `MAP id, full_name = name` | `SELECT id, name AS full_name` | `rows.Select(r => new { r.Id, FullName = r.Name })` | `rows.map(({ id, name }) => ({ id, full_name: name }))` | `rows.stream().map(r -> new Result(r.id(), r.name()))` | `rows.into_iter().map(\|r\| Result { id: r.id, full_name: r.name })` |
+| `FILTER EQ(status, 'active')` | `WHERE status = 'active'` | `rows.Where(r => r.Status == "active")` | `rows.filter(r => r.status === "active")` | `rows.stream().filter(r -> r.status().equals("active"))` | `rows.into_iter().filter(\|r\| r.status == "active")` |
+| `MAP_MANY lines` | `CROSS JOIN UNNEST(lines) AS line` | `rows.SelectMany(r => r.Lines)` | `rows.flatMap(r => r.lines)` | `rows.stream().flatMap(r -> r.lines().stream())` | `rows.into_iter().flat_map(\|r\| r.lines)` |
+| `GROUP_BY region MAP revenue = SUM(amount)` | `SELECT region, SUM(amount) AS revenue FROM source GROUP BY region` | `rows.GroupBy(r => r.Region).Select(g => new { Region = g.Key, Revenue = g.Sum(r => r.Amount) })` | `Map.groupBy(rows, r => r.region)` + aggregate | `rows.stream().collect(groupingBy(Row::region, summingDouble(Row::amount)))` | `rows.into_iter().into_group_map_by(\|r\| r.region.clone())` + aggregate |
+| `SORT_BY price DESC, name ASC` | `ORDER BY price DESC, name ASC` | `rows.OrderByDescending(r => r.Price).ThenBy(r => r.Name)` | `rows.toSorted((a, b) => b.price - a.price \|\| a.name.localeCompare(b.name))` | `rows.stream().sorted(comparing(Row::price).reversed().thenComparing(Row::name))` | `rows.sort_by(\|a, b\| b.price.total_cmp(&a.price).then_with(\|\| a.name.cmp(&b.name)))` |
+| `LIMIT 1024` | `LIMIT 1024` | `rows.Take(1024)` | `rows.slice(0, 1024)` | `rows.stream().limit(1024)` | `rows.into_iter().take(1024)` |
+
 ## Data Sources
 
 QuickQL can read:
