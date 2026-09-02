@@ -140,6 +140,8 @@ LIMIT 1024
 | `COUNT(field)` | Count of values |
 | `ARRAY(a, b, ...)` | Collect values into an array |
 | `UNZIPROWS(rows)` | Convert row objects into column arrays |
+| `JOINROWS({a, b}, key)` | Inner-join two object arrays on a shared key |
+| `JOINROWSINDEX({a, b}, key)` | Join the first array's key to the second array's index |
 | `CONCAT(a, b, ...)` | Concatenate strings |
 | `INDEXOF(array, value)` | Zero-based index of a value in an array, or `-1` |
 | `EQ(a, b)` | `true` if `a` equals `b` |

@@ -277,6 +277,36 @@ MAP columns = UNZIPROWS([
 
 ---
 
+### JOINROWS
+
+Inner-joins exactly two named arrays of objects using a field present in both arrays. The key is promoted to each output row and removed from the nested objects. Output rows are sorted by the key. Returns `null` if the input is not an object containing exactly two arrays of objects, or if a row in the first array does not contain the key.
+
+```ql
+MAP rows = JOINROWS({
+  a: [{f: 'hello', i: 1}, {f: 'world', i: 0}],
+  b: [{f: 'a', i: 0}, {f: 'b', i: 1}]
+}, 'i')
+-- [
+--   {i: 0, a: {f: 'world'}, b: {f: 'a'}},
+--   {i: 1, a: {f: 'hello'}, b: {f: 'b'}}
+-- ]
+```
+
+---
+
+### JOINROWSINDEX
+
+Like `JOINROWS`, but uses the zero-based index of each item in the second array as its key. This is useful when the second array has no identifier field.
+
+```ql
+MAP rows = JOINROWSINDEX({
+  a: [{f: 'hello', i: 1}, {f: 'world', i: 0}],
+  b: [{f: 'a'}, {f: 'b'}]
+}, 'i')
+```
+
+---
+
 ## Data-loading functions
 
 These functions resolve a source at query time, returning the loaded data as a value. Use them inside `SOURCE` or inside a `MAP` assignment.

@@ -125,7 +125,6 @@ fn euclidean_distance(left: &[f64], right: &[f64]) -> f64 {
         .fold(0.0, |distance, (left, right)| distance.hypot(left - right))
 }
 
-
 // k-nearest-neighbor
 #[fn_info()]
 fn nn(
@@ -133,12 +132,19 @@ fn nn(
     neighbors: Vec<Vec<f64>>,
     k: usize,
     distance: Option<&Value>,
+    additional: Option<&Value>,
     params: MetaParameters,
 ) -> Value {
     if rows.is_empty() || neighbors.is_empty() || k == 0 {
         return Value::Null;
     }
-
+    let additional = match additional {
+        None | Some(Value::Null) => None,
+        Some(additional) => match additional.as_array() {
+            Some(additional) if additional.len() == neighbors.len() => Some(additional),
+            _ => return Value::Null,
+        },
+    };
     let Some(distance) = DistanceMetric::parse(distance) else {
         return Value::Null;
     };
@@ -253,10 +259,25 @@ fn nn(
         .map(|result| result.unwrap())
         .unzip();
 
-    serde_json::json!({
+    let mut result = serde_json::json!({
         "distance": distances,
         "index": indices,
-    })
+    });
+    if let Some(additional) = additional {
+        let values = indices
+            .iter()
+            .map(|row_indices| {
+                Value::Array(
+                    row_indices
+                        .iter()
+                        .map(|index| additional[*index].clone())
+                        .collect(),
+                )
+            })
+            .collect();
+        result["additional"] = Value::Array(values);
+    }
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -363,6 +384,7 @@ mod tests {
             neighbors,
             1,
             None,
+            None,
             MetaParameters {
                 query_path: Path::new("query.ql"),
                 ql_stack: &mut ql_stack,
@@ -373,6 +395,55 @@ mod tests {
 
         assert_eq!(result["index"], Value::Array(expected_indices));
         assert_eq!(result["distance"], json!(vec![vec![0.0]; 64]));
+    }
+
+    #[test]
+    fn nn_includes_additional_values_for_each_neighbor() {
+        let mut ql_stack = Vec::new();
+        let mut progress = NoopFunctionProgress;
+
+        let result = nn(
+            vec![vec![0.0], vec![9.0]],
+            vec![vec![2.0], vec![0.0], vec![10.0]],
+            2,
+            None,
+            Some(&json!(["two", "zero", "ten"])),
+            MetaParameters {
+                query_path: Path::new("query.ql"),
+                ql_stack: &mut ql_stack,
+                file_provider: &FsFileProvider,
+                progress: &mut progress,
+            },
+        );
+
+        assert_eq!(result["index"], json!([[1, 0], [2, 0]]));
+        assert_eq!(
+            result["additional"],
+            json!([["zero", "two"], ["ten", "two"]])
+        );
+    }
+
+    #[test]
+    fn nn_rejects_additional_values_with_a_different_length() {
+        let mut ql_stack = Vec::new();
+        let mut progress = NoopFunctionProgress;
+
+        assert_eq!(
+            nn(
+                vec![vec![0.0]],
+                vec![vec![0.0], vec![1.0]],
+                1,
+                None,
+                Some(&json!(["only one"])),
+                MetaParameters {
+                    query_path: Path::new("query.ql"),
+                    ql_stack: &mut ql_stack,
+                    file_provider: &FsFileProvider,
+                    progress: &mut progress,
+                },
+            ),
+            Value::Null
+        );
     }
 
     #[test]

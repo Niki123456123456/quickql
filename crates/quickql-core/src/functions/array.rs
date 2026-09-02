@@ -14,6 +14,8 @@ pub(crate) fn infos() -> Vec<FnInfo> {
         cross_join_info(),
         zip_rows_info(),
         unzip_rows_info(),
+        join_rows_info(),
+        join_rows_index_info(),
     ]
 }
 
@@ -220,6 +222,97 @@ fn unzip_rows(input: &Value) -> Value {
     )
 }
 
+/// Joins exactly two named arrays of objects using a shared field as their key.
+///
+/// The joined field is promoted to the output row and removed from both nested
+/// objects. Only keys that occur in both arrays are included.
+#[fn_info()]
+fn join_rows(input: &Value, identifier: &str) -> Value {
+    join_rows_with_key(input, identifier, |row, _| row.get(identifier).cloned())
+}
+
+/// Joins two named arrays of objects using a field from the first array and the
+/// zero-based position of each item in the second array as its key.
+#[fn_info()]
+fn join_rows_index(input: &Value, identifier: &str) -> Value {
+    join_rows_with_key(input, identifier, |_, index| {
+        Some(Value::from(index as u64))
+    })
+}
+
+fn join_rows_with_key<F>(input: &Value, identifier: &str, second_key: F) -> Value
+where
+    F: Fn(&serde_json::Map<String, Value>, usize) -> Option<Value>,
+{
+    let Some(input) = input.as_object() else {
+        return Value::Null;
+    };
+    if input.len() != 2 {
+        return Value::Null;
+    }
+
+    let Some(arrays) = input
+        .iter()
+        .map(|(name, values)| values.as_array().map(|values| (name, values)))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Value::Null;
+    };
+    let [(first_name, first_values), (second_name, second_values)] = arrays.as_slice() else {
+        return Value::Null;
+    };
+
+    let first_rows = first_values
+        .iter()
+        .map(Value::as_object)
+        .collect::<Option<Vec<_>>>();
+    let second_rows = second_values
+        .iter()
+        .map(Value::as_object)
+        .collect::<Option<Vec<_>>>();
+    let (Some(first_rows), Some(second_rows)) = (first_rows, second_rows) else {
+        return Value::Null;
+    };
+
+    let mut rows = Vec::new();
+    for first_row in first_rows {
+        let Some(key) = first_row.get(identifier).cloned() else {
+            return Value::Null;
+        };
+        let Some((_, second_row)) = second_rows
+            .iter()
+            .enumerate()
+            .find(|(index, row)| second_key(row, *index).as_ref() == Some(&key))
+        else {
+            continue;
+        };
+
+        let mut first_value = first_row.clone();
+        first_value.remove(identifier);
+        let mut second_value = (*second_row).clone();
+        second_value.remove(identifier);
+
+        let mut row = serde_json::Map::new();
+        row.insert(identifier.to_string(), key);
+        row.insert(first_name.to_string(), Value::Object(first_value));
+        row.insert(second_name.to_string(), Value::Object(second_value));
+        rows.push(Value::Object(row));
+    }
+
+    rows.sort_by(|left, right| {
+        compare_sort_values(
+            left.as_object()
+                .and_then(|row| row.get(identifier))
+                .unwrap(),
+            right
+                .as_object()
+                .and_then(|row| row.get(identifier))
+                .unwrap(),
+        )
+    });
+    Value::Array(rows)
+}
+
 fn compare_sort_values(left: &Value, right: &Value) -> std::cmp::Ordering {
     match (left.as_f64(), right.as_f64()) {
         (Some(left), Some(right)) => left
@@ -258,5 +351,44 @@ mod tests {
             Value::Null
         );
         assert_eq!(unzip_rows(&json!([])), json!({}));
+    }
+
+    #[test]
+    fn join_rows_joins_two_arrays_on_the_given_identifier() {
+        let input = json!({
+            "a": [{"f": "hello", "i": 1}, {"f": "world", "i": 0}],
+            "b": [{"f": "a", "i": 0}, {"f": "b", "i": 1}]
+        });
+
+        assert_eq!(
+            join_rows(&input, "i"),
+            json!([
+                {"i": 0, "a": {"f": "world"}, "b": {"f": "a"}},
+                {"i": 1, "a": {"f": "hello"}, "b": {"f": "b"}}
+            ])
+        );
+    }
+
+    #[test]
+    fn join_rows_index_uses_the_second_array_position_as_the_key() {
+        let input = json!({
+            "a": [{"f": "hello", "i": 1}, {"f": "world", "i": 0}],
+            "b": [{"f": "a"}, {"f": "b"}]
+        });
+
+        assert_eq!(
+            join_rows_index(&input, "i"),
+            json!([
+                {"i": 0, "a": {"f": "world"}, "b": {"f": "a"}},
+                {"i": 1, "a": {"f": "hello"}, "b": {"f": "b"}}
+            ])
+        );
+    }
+
+    #[test]
+    fn join_rows_rejects_invalid_input() {
+        assert_eq!(join_rows(&json!({"a": []}), "i"), Value::Null);
+        assert_eq!(join_rows(&json!({"a": [{}], "b": []}), "i"), Value::Null);
+        assert_eq!(join_rows(&json!({"a": [1], "b": []}), "i"), Value::Null);
     }
 }
