@@ -144,6 +144,7 @@ LIMIT 1024
 | `JOINROWSINDEX({a, b}, key)` | Join the first array's key to the second array's index |
 | `CONCAT(a, b, ...)` | Concatenate strings |
 | `INDEXOF(array, value)` | Zero-based index of a value in an array, or `-1` |
+| `CONTAINS(array, value)` | `true` if the array contains the value |
 | `EQ(a, b)` | `true` if `a` equals `b` |
 | `AND(a, b, ...)` | `true` if all arguments are truthy |
 | `OR(a, b, ...)` | `true` if any argument is truthy |

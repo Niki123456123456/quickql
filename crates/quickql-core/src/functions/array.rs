@@ -6,6 +6,7 @@ use crate::{flatten_value, value_to_string, FnInfo};
 pub(crate) fn infos() -> Vec<FnInfo> {
     vec![
         index_of_info(),
+        contains_info(),
         range_info(),
         at_info(),
         distinct_info(),
@@ -22,6 +23,11 @@ pub(crate) fn infos() -> Vec<FnInfo> {
 #[fn_info]
 fn index_of(values: &[Value], needle: &Value) -> Option<usize> {
     values.iter().position(|value| value == needle)
+}
+
+#[fn_info]
+fn contains(values: &[Value], needle: &Value) -> bool {
+    values.contains(needle)
 }
 
 #[fn_info()]
@@ -390,5 +396,15 @@ mod tests {
         assert_eq!(join_rows(&json!({"a": []}), "i"), Value::Null);
         assert_eq!(join_rows(&json!({"a": [{}], "b": []}), "i"), Value::Null);
         assert_eq!(join_rows(&json!({"a": [1], "b": []}), "i"), Value::Null);
+    }
+
+    #[test]
+    fn contains_returns_true_when_value_is_present() {
+        assert!(contains(&json!(["a", "b", "c"]).as_array().unwrap(), &json!("b")));
+    }
+
+    #[test]
+    fn contains_returns_false_when_value_is_absent() {
+        assert!(!contains(&json!(["a", "b", "c"]).as_array().unwrap(), &json!("d")));
     }
 }

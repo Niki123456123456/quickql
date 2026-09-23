@@ -166,6 +166,16 @@ MAP analysis = OPTICS([[0, 0], [0, 0.1], [10, 10]], {minPoints: 2, tolerance: 20
 
 ## Logic functions
 
+### NOT
+
+Negates the truthiness of a value, using the same rules as `AND` and `OR`. Returns `true` for `false`, `null`, zero, empty strings, empty arrays, and empty objects; otherwise returns `false`.
+
+```ql
+FILTER NOT(EQ(status, 'cancelled'))
+```
+
+---
+
 ### EQ
 
 Returns `true` if both arguments are equal (strict equality).
@@ -242,6 +252,17 @@ Returns the zero-based index of a value in an array. Returns `-1` when the value
 ```ql
 MAP c = INDEXOF(['a', 'b', 'c'], 'c')  -- 2
 MAP missing = INDEXOF(['a', 'b', 'c'], 'd')  -- -1
+```
+
+---
+
+### CONTAINS
+
+Returns `true` if a value is present in an array. Returns `null` when the first argument is not an array.
+
+```ql
+MAP has_c = CONTAINS(['a', 'b', 'c'], 'c')  -- true
+MAP missing = CONTAINS(['a', 'b', 'c'], 'd')  -- false
 ```
 
 ---
