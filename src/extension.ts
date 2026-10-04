@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { QueryProgress, QueryResult, ResultsViewProvider } from './resultsPanel';
+import { ensureBundledBinaryExecutable } from './binaries';
 
 let client: LanguageClient | undefined;
 let resultsProvider: ResultsViewProvider;
@@ -418,6 +419,7 @@ function resolveBinary(context: vscode.ExtensionContext, setting: string, binary
   const platform = `${process.platform}-${process.arch}`;
   const packaged = path.join(context.extensionPath, 'bin', platform, exe);
   if (fs.existsSync(packaged)) {
+    ensureBundledBinaryExecutable(packaged);
     return packaged;
   }
 

@@ -65,7 +65,8 @@ jobs:
     permissions:
       contents: write
     needs: build-binaries
-    runs-on: windows-latest
+    # POSIX file modes are needed for the bundled macOS executables.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -77,6 +78,7 @@ jobs:
           path: bin/
           merge-multiple: true
       - run: npm ci
+      - run: npm test
       - run: npm run check:binaries
       - name: Update extension version before packaging
         shell: bash

@@ -20,3 +20,18 @@ for (const [target, suffix] of targets) {
 if (missing.length > 0) {
   throw new Error(`Universal VSIX is missing binaries:\n${missing.join('\n')}\nBuild the binaries on Windows x64, macOS Intel, and Apple Silicon runners first.`);
 }
+
+// GitHub artifact downloads reset file modes to 0644. Package on a POSIX host
+// so the VSIX can record executable permissions for the macOS binaries.
+if (process.platform === 'win32') {
+  throw new Error('Package the universal VSIX on macOS or Linux to preserve macOS executable permissions.');
+}
+
+for (const [target, suffix] of targets) {
+  if (suffix === '.exe') continue;
+  for (const binary of binaries) {
+    const file = path.join(root, 'bin', target, binary);
+    fs.chmodSync(file, 0o755);
+    fs.accessSync(file, fs.constants.X_OK);
+  }
+}

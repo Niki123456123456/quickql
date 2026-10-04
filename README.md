@@ -198,6 +198,10 @@ executables for both the query engine and language server. Build each target on
 its matching operating system, then collect the generated `bin/<platform>-<arch>`
 folders before packaging. The GitHub Actions workflow
 `.github/workflows/package-universal.yml` does this on tag pushes and manual runs.
+Package on macOS or Linux: `check:binaries` restores executable permissions for
+the macOS binaries after artifact downloads, before they are added to the VSIX.
+The extension also repairs missing owner execute permissions on bundled binaries
+before starting the query engine or language server.
 
 ## Detailed Documentation
 
