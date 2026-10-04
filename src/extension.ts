@@ -415,7 +415,8 @@ function resolveBinary(context: vscode.ExtensionContext, setting: string, binary
   }
 
   const exe = process.platform === 'win32' ? `${binaryName}.exe` : binaryName;
-  const packaged = path.join(context.extensionPath, 'bin', exe);
+  const platform = `${process.platform}-${process.arch}`;
+  const packaged = path.join(context.extensionPath, 'bin', platform, exe);
   if (fs.existsSync(packaged)) {
     return packaged;
   }

@@ -108,8 +108,9 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "copy:binaries": "node scripts/copy-binaries.js",
+    "check:binaries": "node scripts/check-binaries.js",
     "build:rust": "cargo build --release && npm run copy:binaries",
-    "vscode:prepublish": "npm run compile && npm run build:rust"
+    "vscode:prepublish": "npm run compile && npm run check:binaries"
   },
   "devDependencies": {
     "@types/node": "^20.14.12",

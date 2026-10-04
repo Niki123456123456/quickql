@@ -1,0 +1,58 @@
+name: Package universal VSIX
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run build:rust
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: bin/
+          if-no-files-found: error
+
+  package:
+    name: Create one universal VSIX
+    needs: build-binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: bin/
+          merge-multiple: true
+      - run: npm ci
+      - run: npm run check:binaries
+      - run: npx --yes @vscode/vsce package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quickql-universal-vsix
+          path: '*.vsix'
+          if-no-files-found: error

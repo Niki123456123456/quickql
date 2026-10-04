@@ -189,8 +189,15 @@ code --install-extension quickql-0.0.3.vsix
 **Build package**
 
 ```sh
+npm run check:binaries
 vsce package
 ```
+
+The universal VSIX bundles Windows x64, macOS Intel, and macOS Apple Silicon
+executables for both the query engine and language server. Build each target on
+its matching operating system, then collect the generated `bin/<platform>-<arch>`
+folders before packaging. The GitHub Actions workflow
+`.github/workflows/package-universal.yml` does this on tag pushes and manual runs.
 
 ## Detailed Documentation
 
