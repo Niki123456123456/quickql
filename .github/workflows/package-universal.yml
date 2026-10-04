@@ -1,4 +1,4 @@
-name: Package universal VSIX
+name: Package and publish universal VSIX
 
 on:
   workflow_dispatch:
@@ -6,9 +6,35 @@ on:
     tags:
       - 'v*'
 
+# Serialize releases so two runs cannot publish the same next version.
+concurrency:
+  group: quickql-marketplace-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
+  preflight:
+    name: Check publishing configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Marketplace credential and release ref
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::Add the VSCE_PAT Actions secret with Marketplace publishing access."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Run manual releases from main."
+            exit 1
+          fi
+
   build-binaries:
     name: Build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -36,6 +62,8 @@ jobs:
 
   package:
     name: Create one universal VSIX
+    permissions:
+      contents: write
     needs: build-binaries
     runs-on: windows-latest
     steps:
@@ -50,9 +78,50 @@ jobs:
           merge-multiple: true
       - run: npm ci
       - run: npm run check:binaries
-      - run: npx --yes @vscode/vsce package
+      - name: Update extension version before packaging
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo "::error::Release tags must have the form vMAJOR.MINOR.PATCH."
+              exit 1
+            fi
+            npm version "$version" --no-git-tag-version --ignore-scripts --allow-same-version
+          else
+            npm version patch --no-git-tag-version --ignore-scripts
+          fi
+      - run: npx --yes @vscode/vsce package --out quickql.vsix
       - uses: actions/upload-artifact@v4
         with:
           name: quickql-universal-vsix
           path: '*.vsix'
           if-no-files-found: error
+
+      # Persist manual version bumps before publishing; a rejected push stops release.
+      - name: Commit version to main
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          version=$(node -p "require('./package.json').version")
+          git commit -m "chore: release v$version [skip ci]"
+          git push origin HEAD:main
+
+  publish:
+    name: Publish to Visual Studio Marketplace
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: quickql-universal-vsix
+      - name: Publish VSIX to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --packagePath quickql.vsix
